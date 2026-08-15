@@ -1,9 +1,16 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentStep } from "@/lib/types";
 
 type TraceItem = { kind: "stage"; text: string } | { kind: "step"; step: AgentStep };
+type NearbyStation = { name: string; routes: string[]; distanceMiles: number };
+
+const subwayColors: Record<string, { background: string; color?: string }> = {
+  "1": { background: "#EE352E" }, "2": { background: "#EE352E" }, "3": { background: "#EE352E" }, "4": { background: "#00933C" }, "5": { background: "#00933C" }, "6": { background: "#00933C" }, "7": { background: "#B933AD" },
+  A: { background: "#0039A6" }, C: { background: "#0039A6" }, E: { background: "#0039A6" }, B: { background: "#FF6319" }, D: { background: "#FF6319" }, F: { background: "#FF6319" }, M: { background: "#FF6319" },
+  G: { background: "#6CBE45" }, J: { background: "#996633" }, Z: { background: "#996633" }, L: { background: "#A7A9AC" }, N: { background: "#FCCC0A", color: "#111" }, Q: { background: "#FCCC0A", color: "#111" }, R: { background: "#FCCC0A", color: "#111" }, W: { background: "#FCCC0A", color: "#111" }, S: { background: "#808183" },
+};
 
 type Result = {
   listing: {
@@ -24,6 +31,7 @@ type Result = {
     rentRange?: string;
     minIncome?: number;
     maxIncome?: number;
+    listedDate?: string;
     incomeBands?: { extremelyLow: number; veryLow: number; low: number; moderate: number };
   };
   reason: string;
@@ -40,14 +48,27 @@ export default function Housing() {
   const [income, setIncome] = useState("");
   const [householdSize, setHouseholdSize] = useState(1);
   const [boroughs, setBoroughs] = useState<string[]>([]);
-  const [priority, setPriority] = useState("best overall match");
+  const [priority, setPriority] = useState("newest listed");
   const [mustHaves, setMustHaves] = useState<string[]>([]);
   const [gallery, setGallery] = useState<Record<string, number>>({});
+  const [nearbyTransit, setNearbyTransit] = useState<Record<string, NearbyStation[]>>({});
+  const [page, setPage] = useState(1);
   const abort = useRef<AbortController | null>(null);
+  const initialListingsLoaded = useRef(false);
 
   const ami100 = [0, 118800, 135700, 152700, 169600, 183200, 196800, 210400, 223900];
   const annualIncome = Number(income.replace(/[^0-9.]/g, "")) || 0;
   const householdAmi = annualIncome ? Math.round((annualIncome / ami100[householdSize]) * 100) : null;
+  const pageSize = 15;
+  const filteredResults = (results ?? []).filter((result) => mustHaves.every((filter) => {
+    const text = `${result.listing.description ?? ""} ${result.reason}`.toLowerCase();
+    if (filter === "clean violation record") return result.openViolations === 0;
+    if (filter === "near subway") return /subway|train|transit/.test(text);
+    if (filter === "pet friendly") return /pet friendly|pets allowed/.test(text);
+    return text.includes(filter);
+  }));
+  const totalPages = Math.max(1, Math.ceil(filteredResults.length / pageSize));
+  const pageResults = filteredResults.slice((page - 1) * pageSize, page * pageSize);
 
   function runGuidedSearch() {
     const parts = [`Household income $${annualIncome} for ${householdSize} ${householdSize === 1 ? "person" : "people"}`, `boroughs: ${boroughs.join(" or ")}`, `priority: ${priority}`];
@@ -88,7 +109,7 @@ export default function Housing() {
           const e = JSON.parse(line.slice(5).trim());
           if (e.stage === "searching") setTrace((t) => [...t, { kind: "stage", text: e.message }]);
           else if (e.stage === "step") setTrace((t) => [...t, { kind: "step", step: e.step }]);
-          else if (e.stage === "results") setResults(e.results);
+          else if (e.stage === "results") { setResults(e.results); setPage(1); }
           else if (e.stage === "done") setBusy(false);
           else if (e.stage === "error") {
             setError(e.message);
@@ -104,8 +125,28 @@ export default function Housing() {
     }
   }
 
+  useEffect(() => {
+    if (initialListingsLoaded.current) return;
+    initialListingsLoaded.current = true;
+    search("Show current affordable housing listings across all five boroughs");
+  }, []);
+
+  useEffect(() => {
+    if (!results?.length) return;
+    const controller = new AbortController();
+    const visible = filteredResults.slice((page - 1) * pageSize, page * pageSize);
+    Promise.all(visible.map(async ({ listing }) => {
+      try {
+        const response = await fetch(`/api/nearby-transit?address=${encodeURIComponent(`${listing.address}, ${listing.borough}`)}`, { signal: controller.signal });
+        const data = response.ok ? await response.json() : { stations: [] };
+        return [listing.id, (data.stations ?? []).slice(0, 2)] as const;
+      } catch { return [listing.id, []] as const; }
+    })).then((entries) => setNearbyTransit(Object.fromEntries(entries)));
+    return () => controller.abort();
+  }, [results, page, mustHaves]);
+
   return (
-    <main className="shell">
+    <main className="shell housing-shell">
       <header className="top">
         <div className="wordmark">Super · Housing</div>
         <h1 className="tagline">Find a place. Know the building.</h1>
@@ -143,8 +184,7 @@ export default function Housing() {
       <div className="search-step"><span className="step-number">2</span><div><h2>Choose boroughs</h2><p>Pick one or several places to include in your search.</p></div></div>
       <div className="borough-picker">{["Manhattan","Brooklyn","Bronx","Queens","Staten Island"].map((name) => <button type="button" aria-pressed={boroughs.includes(name)} className={boroughs.includes(name) ? "selected" : ""} key={name} onClick={() => setBoroughs((current) => current.includes(name) ? current.filter((value) => value !== name) : [...current, name])}><b>{name}</b></button>)}</div>
       <div className="search-step"><span className="step-number">3</span><div><h2>Set priorities</h2><p>These are optional and help rank the matches.</p></div></div>
-      <div className="preferences-grid"><label>Most important<select value={priority} onChange={(event) => setPriority(event.target.value)}><option>best overall match</option><option>cheapest possible</option><option>fewest building violations</option><option>most available units</option><option>closest to subway</option></select></label><label>Further specify<input value={brief} onChange={(event) => setBrief(event.target.value)} onKeyDown={(event) => event.key === "Enter" && annualIncome && boroughs.length && runGuidedSearch()} placeholder="Optional: studio, wheelchair access, neighborhood…" /></label></div>
-      <div className="must-haves"><span>Must haves</span>{["laundry","elevator","pet friendly","near subway","clean violation record"].map((item) => <label key={item}><input type="checkbox" checked={mustHaves.includes(item)} onChange={() => setMustHaves((current) => current.includes(item) ? current.filter((value) => value !== item) : [...current, item])} />{item}</label>)}</div>
+      <div className="preferences-grid"><label>Most important<select value={priority} onChange={(event) => setPriority(event.target.value)}><option>newest listed</option><option>best overall match</option><option>cheapest possible</option><option>fewest building violations</option><option>most available units</option><option>closest to subway</option></select></label><label>Further specify<input value={brief} onChange={(event) => setBrief(event.target.value)} onKeyDown={(event) => event.key === "Enter" && annualIncome && boroughs.length && runGuidedSearch()} placeholder="Optional: studio, wheelchair access, neighborhood…" /></label></div>
       <button className="go guided-submit" onClick={runGuidedSearch} disabled={busy || !annualIncome || !boroughs.length}>{busy ? "Searching…" : "Find housing"}</button>
       {!annualIncome || !boroughs.length ? <p className="guided-hint">Add household income and choose at least one borough to begin.</p> : null}
       </section>
@@ -190,9 +230,11 @@ export default function Housing() {
       {error && <div className="error">{error}</div>}
 
       {results && results.length > 0 && (
-        <section className="cart">
-          <div className="cart-title">{results.length} places worth looking at</div>
-          {results.map((r) => (
+        <div className="results-layout">
+        <aside className="filter-sidebar"><div><span className="filter-eyebrow">Refine results</span><h2>Must haves</h2><p>Choose any combination.</p></div>{["laundry","elevator","pet friendly","near subway","clean violation record"].map((item) => <label key={item}><input type="checkbox" checked={mustHaves.includes(item)} onChange={() => { setPage(1); setMustHaves((current) => current.includes(item) ? current.filter((value) => value !== item) : [...current, item]); }} /><span>{item}</span></label>)}{mustHaves.length ? <button className="clear-filters" onClick={() => { setMustHaves([]); setPage(1); }}>Clear filters</button> : null}</aside>
+        <section className="cart housing-results">
+          <div className="cart-title">{filteredResults.length === results.length ? `${results.length} places worth looking at` : `${filteredResults.length} of ${results.length} places match`}</div>
+          {pageResults.map((r) => (
             <div className={`listing${r.listing.imageUrl || r.listing.imageUrls?.length ? " with-image" : ""}`} key={r.listing.id}>
               {(() => {
                 const images = r.listing.imageUrls?.length ? r.listing.imageUrls : r.listing.imageUrl ? [r.listing.imageUrl] : [];
@@ -228,8 +270,10 @@ export default function Housing() {
                   .filter(Boolean)
                   .join(" · ")}
               </div>
+              {r.listing.listedDate ? <div className="listed-date">Listed {new Date(`${r.listing.listedDate}T00:00:00`).toLocaleDateString("en-US", { month: "short", year: "numeric" })}</div> : null}
               <div className="why">{r.reason}</div>
               {r.listing.description ? <p className="l-description">{r.listing.description}</p> : null}
+              {nearbyTransit[r.listing.id]?.length ? <div className="card-transit"><span>Nearby subway</span>{nearbyTransit[r.listing.id].map((station) => <div className="card-station" key={station.name}><span className="route-dots">{station.routes.map((route) => <b key={route} style={subwayColors[route] ?? subwayColors.S}>{route}</b>)}</span><small>{station.name} · {station.distanceMiles < .1 ? station.distanceMiles.toFixed(2) : station.distanceMiles.toFixed(1)} mi</small></div>)}</div> : null}
               {annualIncome && (r.listing.minIncome || r.listing.maxIncome) ? (
                 <div className={`income-match ${annualIncome >= (r.listing.minIncome ?? 0) && annualIncome <= (r.listing.maxIncome ?? Infinity) ? "match" : "miss"}`}>
                   {annualIncome >= (r.listing.minIncome ?? 0) && annualIncome <= (r.listing.maxIncome ?? Infinity)
@@ -247,16 +291,14 @@ export default function Housing() {
                   <span className="vio">building record not checked</span>
                 )}
                 {r.listing.units ? <span className="l-units">{r.listing.units} units</span> : null}
-                {(r.listing.applicationUrl || r.listing.url) ? (
-                  <a className="apply-link" href={r.listing.applicationUrl || r.listing.url} target="_blank" rel="noreferrer">
-                    View application →
-                  </a>
-                ) : null}
+                <div className="card-actions"><a className="learn-more" href={`/housing/${encodeURIComponent(r.listing.id)}`}>Learn more</a><button className="auto-apply" disabled title="Auto apply will be available in a future update">Auto apply <span>Coming soon</span></button></div>
               </div>
               </div>
             </div>
           ))}
+          {totalPages > 1 ? <nav className="results-pagination" aria-label="Housing result pages"><button onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page === 1}>← Previous</button><span>Page {page} of {totalPages} · {filteredResults.length} listings</span><button onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={page === totalPages}>Next →</button></nav> : null}
         </section>
+        </div>
       )}
 
       <footer className="credit">

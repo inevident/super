@@ -247,6 +247,9 @@ export default function Housing() {
                   <span className="vio">building record not checked</span>
                 )}
                 {r.listing.units ? <span className="l-units">{r.listing.units} units</span> : null}
+                <a className="scan-shop-link" href={`/housing/${encodeURIComponent(r.listing.id)}?scan=1`}>
+                  Scan violations &amp; shop →
+                </a>
                 {(r.listing.applicationUrl || r.listing.url) ? (
                   <a className="apply-link" href={r.listing.applicationUrl || r.listing.url} target="_blank" rel="noreferrer">
                     View application →

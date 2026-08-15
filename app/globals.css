@@ -710,6 +710,7 @@ a { color: inherit; }
 .vio.ok { color: var(--verify, #1c7a6b); }
 .vio.bad { color: var(--alert); font-weight: 600; }
 .l-units { color: var(--text-3); }
+.scan-shop-link,.apply-link { margin-left: auto; color: var(--ink); font-weight: 700; text-decoration: none; }.scan-shop-link:hover,.apply-link:hover { text-decoration: underline; }.scan-shop-link + .apply-link { margin-left: 0; }
 
 .credit {
   margin-top: 56px;

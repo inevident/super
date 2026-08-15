@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Listing } from "@/lib/listings";
 import type { Address, BuildingProfile, Pick, ScanEvent } from "@/lib/types";
 
@@ -24,6 +24,7 @@ export default function ListingDetail({ listing }: { listing: Listing }) {
   const [picks, setPicks] = useState<Pick[] | null>(null);
   const [error, setError] = useState("");
   const [stations, setStations] = useState<{ name: string; routes: string[]; distanceMiles: number }[]>([]);
+  const autoScanned = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -57,6 +58,13 @@ export default function ListingDetail({ listing }: { listing: Listing }) {
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Scan failed"); }
     finally { setScanning(false); }
   }
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("scan") === "1" && !autoScanned.current) {
+      autoScanned.current = true;
+      scanAndShop();
+    }
+  }, []);
 
   const mapQuery = encodeURIComponent(listing.address);
   return (

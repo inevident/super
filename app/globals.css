@@ -300,6 +300,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .card-location, .card-units, .match-reason, .near-reason { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--muted); }
 .card-location { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-units { margin-top: 4px; font-family: var(--mono); font-size: 9px; color: var(--quiet); }
+.subway-lines { display: flex; align-items: center; gap: 5px; margin-top: 9px; font-family: var(--mono); font-size: 8px; color: var(--quiet); text-transform: uppercase; letter-spacing: .08em; }
+.subway-lines > span { margin-right: 2px; }
+.subway-lines i { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font-family: Arial, sans-serif; font-size: 10px; font-style: normal; font-weight: 700; letter-spacing: 0; line-height: 1; }
+.subway-lines em { font-size: 8px; font-style: normal; text-transform: none; letter-spacing: 0; }
 .match-reason, .near-reason { margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line); }
 .near-reason { color: var(--amber); }
 .card-badges { margin-top: auto; padding-top: 12px; display: flex; flex-wrap: wrap; gap: 5px; }

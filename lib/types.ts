@@ -237,7 +237,7 @@ export type MarketplaceListing = {
   excludedHistoricalViolations: ViolationRecord[];
   profile: BuildingProfile | null;
   applyUrl: string;
-  source: "live" | "snapshot";
+  source: string;
 };
 
 export type BuildingAssessment = {
@@ -251,7 +251,7 @@ export type BuildingAssessment = {
 export type MarketplaceEvent =
   | { stage: "planning"; message: string }
   | { stage: "plan"; plan: SearchPlan }
-  | { stage: "inventory"; message: string; count: number; source: "live" | "snapshot" }
+  | { stage: "inventory"; message: string; count: number; source: string }
   | { stage: "inspecting"; message: string; completed: number; total: number }
   | { stage: "listing"; listing: MarketplaceListing }
   | { stage: "pricing"; message: string }

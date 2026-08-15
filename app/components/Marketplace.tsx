@@ -58,18 +58,42 @@ function unique<T>(items: T[]) {
   return [...new Set(items)];
 }
 
-function replaceListingQuery(id: string | null) {
+function subwayColor(line: string) {
+  if (/^[123]$/.test(line)) return { background: "#EE352E", color: "#fff" };
+  if (/^[456]$/.test(line)) return { background: "#00933C", color: "#fff" };
+  if (line === "7") return { background: "#B933AD", color: "#fff" };
+  if (/^[ACE]$/.test(line)) return { background: "#0039A6", color: "#fff" };
+  if (/^[BDFM]$/.test(line)) return { background: "#FF6319", color: "#fff" };
+  if (line === "G") return { background: "#6CBE45", color: "#fff" };
+  if (/^[JZ]$/.test(line)) return { background: "#996633", color: "#fff" };
+  if (/^[LS]$/.test(line)) return { background: "#A7A9AC", color: "#111" };
+  if (/^[NQRW]$/.test(line)) return { background: "#FCCC0A", color: "#111" };
+  return { background: "#555", color: "#fff" };
+}
+
+function SubwayLines({ lines }: { lines: string[] }) {
+  const routes = unique(lines.map((line) => line.trim().toUpperCase()).filter(Boolean));
+  return (
+    <div className="subway-lines" aria-label={routes.length ? `Subway lines ${routes.join(", ")}` : "Subway lines unavailable"}>
+      <span>Subway lines</span>
+      {routes.length ? routes.map((line) => <i key={line} style={subwayColor(line)}>{line}</i>) : <em>lookup unavailable</em>}
+    </div>
+  );
+}
+
+function replaceListingQuery(id: string | null, push = false) {
   const url = new URL(window.location.href);
   if (id) url.searchParams.set("listing", id);
   else url.searchParams.delete("listing");
-  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  window.history[push ? "pushState" : "replaceState"](window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 function safeImageSource(source: string | undefined | null) {
   if (!source) return false;
+  if (source.startsWith("/")) return true;
   try {
     const host = new URL(source).hostname;
-    return host === "a806-housingconnectapi.nyc.gov" || host === "cdn.shopify.com";
+    return ["a806-housingconnectapi.nyc.gov", "cdn.shopify.com", "www.nychdc.com", "nychdc.com", "residenewyork.com", "www.residenewyork.com", "fifthave.org", "www.fifthave.org"].includes(host);
   } catch {
     return false;
   }
@@ -145,6 +169,7 @@ function ListingCard({
             {[listing.neighborhood, listing.borough].filter(Boolean).join(", ")} · {listing.address}
           </p>
           <p className="card-units">{availableUnits || listing.units} available · {bedrooms || "Unit mix available"}</p>
+          <SubwayLines lines={listing.transit} />
           {listing.eligibility.reasons.length ? (
             <p className="near-reason">{listing.eligibility.reasons.join(" · ")}</p>
           ) : (
@@ -299,7 +324,7 @@ function DetailPanel({
                 </div>
                 <div>
                   <div className="section-kicker">Nearby transit</div>
-                  <h3>{listing.transit.length ? `${listing.transit.join(" · ")} trains` : "Transit details unavailable"}</h3>
+                  <SubwayLines lines={listing.transit} />
                   <ul className="nearby-list">
                     {listing.nearby.filter((place) => /Subway|Train/i.test(place.type)).slice(0, 5).map((place) => (
                       <li key={`${place.name}-${place.train}`}>{place.name}{place.train ? ` · ${place.train}` : ""}</li>
@@ -377,8 +402,8 @@ function DetailPanel({
                 </div>
               </section>
 
-              <a className="apply-button" href={listing.applyUrl} target="_blank" rel="noreferrer">Apply on Housing Connect <span>↗</span></a>
-              <p className="official-note">Super checks public records and eligibility bands. Applications and final determinations stay with NYC Housing Connect.</p>
+              <a className="apply-button" href={listing.applyUrl} target="_blank" rel="noreferrer">Apply <span>↗</span></a>
+              <p className="official-note">Super checks public records and eligibility bands. Applications and final determinations stay with the listing provider.</p>
             </div>
           </>
         ) : null}
@@ -434,7 +459,7 @@ export default function Marketplace() {
     } else if (event.stage === "plan") {
       setPlan(event.plan);
       setCheck("planning", `Brief parsed ${event.plan.generatedBy === "agent" ? "by the agent" : "with deterministic fallback"}`, "done");
-      setCheck("inventory", "Searching active Housing Connect lotteries", "active");
+      setCheck("inventory", "Searching active affordable housing sources", "active");
     } else if (event.stage === "inventory") {
       setCheck("inventory", `${event.count} active lotteries loaded${event.source === "snapshot" ? " from fallback snapshot" : " live"}`, "done");
       setCheck("eligibility", "Checking exact rent, bedroom, household, and income bands", "active");
@@ -473,6 +498,12 @@ export default function Marketplace() {
       setError("Enter what you need, household size, and annual household income.");
       return;
     }
+    const searchUrl = new URL(window.location.href);
+    searchUrl.searchParams.set("brief", input.brief);
+    searchUrl.searchParams.set("household", String(input.householdSize));
+    searchUrl.searchParams.set("income", String(input.annualIncome));
+    searchUrl.searchParams.delete("listing");
+    window.history.replaceState(window.history.state, "", `${searchUrl.pathname}${searchUrl.search}${searchUrl.hash}`);
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
@@ -522,7 +553,7 @@ export default function Marketplace() {
 
   const openListing = useCallback(
     async (id: string, updateUrl = true) => {
-      if (updateUrl) replaceListingQuery(id);
+      if (updateUrl) replaceListingQuery(id, true);
       setSelectedId(id);
       setDetail(allListings.find((listing) => listing.id === id) ?? null);
       setDetailLoading(true);
@@ -553,9 +584,32 @@ export default function Marketplace() {
   useEffect(() => {
     if (initialDeepLinkHandled.current) return;
     initialDeepLinkHandled.current = true;
-    const id = new URLSearchParams(window.location.search).get("listing");
+    const params = new URLSearchParams(window.location.search);
+    const savedBrief = params.get("brief");
+    const savedHousehold = params.get("household");
+    const savedIncome = params.get("income");
+    if (savedBrief) setBrief(savedBrief);
+    if (savedHousehold) setHouseholdSize(savedHousehold);
+    if (savedIncome) setAnnualIncome(savedIncome);
+    const id = params.get("listing");
     if (id) void openListing(id, false);
   }, [openListing]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const id = new URLSearchParams(window.location.search).get("listing");
+      if (!id) {
+        setSelectedId(null);
+        setDetail(null);
+        setDetailError("");
+        setDetailLoading(false);
+      } else if (id !== selectedId) {
+        void openListing(id, false);
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [openListing, selectedId]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -580,7 +634,7 @@ export default function Marketplace() {
         <div className="hero-copy">
           <p className="eyebrow">Agentic rental marketplace · New York City</p>
           <h1>Find the apartment.<br />Precheck the building.</h1>
-          <p>Super matches your household to live Housing Connect units, verifies the income math, then reads the building&apos;s inspector-confirmed record before you apply.</p>
+          <p>Super matches your household to affordable housing opportunities, verifies the income math, then reads the building&apos;s inspector-confirmed record before you apply.</p>
         </div>
         <div className="hero-proof"><strong>3 checks Zillow skips</strong><span>Exact eligibility</span><span>Open HPD violations</span><span>One-time Precheck cost</span></div>
       </section>
@@ -642,7 +696,7 @@ export default function Marketplace() {
         <div className="map-pane"><CityMap markers={markers} selectedId={selectedId} onSelect={openListing} /></div>
       </section>
 
-      <footer className="market-footer"><span>Super uses public NYC data. Verify all terms with Housing Connect.</span><strong>Built for NYChackathon August 15th by Ryan Lim</strong></footer>
+      <footer className="market-footer"><span>Super uses public NYC and provider data. Verify all terms with the listing provider.</span><strong>Built for NYChackathon August 15th by Ryan Lim</strong></footer>
 
       {selectedId ? <DetailPanel listing={detail} loading={detailLoading} error={detailError} householdSize={Number(householdSize) || 1} onClose={closeListing} /> : null}
     </main>

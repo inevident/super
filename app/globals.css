@@ -657,6 +657,21 @@ a { color: inherit; }
   flex-direction: column;
   gap: 6px;
 }
+.listing.with-image { padding: 0; overflow: hidden; }
+.listing-image { width: 100%; height: 210px; object-fit: cover; background: var(--line-soft); }
+.listing-body { display: flex; flex-direction: column; gap: 7px; padding: 15px 17px; min-width: 0; }
+.listing:not(.with-image) .listing-body { padding: 0; }
+.l-description { margin: 2px 0; color: var(--text-2); font-size: 13px; line-height: 1.5; }
+.apply-link { margin-left: auto; color: var(--ink); font-weight: 650; text-decoration: none; }
+.apply-link:hover { text-decoration: underline; }
+.income-match { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
+.income-match.match { color: var(--verify, #1c7a6b); }
+.income-match.miss { color: var(--alert); }
+.eligibility { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(150px, .6fr) minmax(170px, .7fr); gap: 10px; margin-top: 10px; }
+.eligibility label { display: flex; flex-direction: column; gap: 5px; font-family: var(--mono); font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: .08em; }
+.eligibility input, .eligibility select { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); padding: 11px 12px; font: 14px var(--sans); text-transform: none; letter-spacing: normal; }
+.ami-result { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; justify-content: center; gap: 2px; color: var(--text-3); font-size: 11px; }
+.ami-result b { color: var(--ink); font: 650 17px var(--mono); }
 .l-head {
   display: flex;
   justify-content: space-between;
@@ -711,6 +726,7 @@ a { color: inherit; }
 }
 
 @media (max-width: 560px) {
+  .eligibility { grid-template-columns: 1fr; }
   .item { grid-template-columns: 44px 1fr; }
   .item .thumb { width: 44px; height: 44px; }
   .item .price { grid-column: 2; text-align: left; }

@@ -17,6 +17,12 @@ type Result = {
     ami?: number;
     source: string;
     url?: string;
+    imageUrl?: string;
+    description?: string;
+    applicationUrl?: string;
+    rentRange?: string;
+    minIncome?: number;
+    maxIncome?: number;
     incomeBands?: { extremelyLow: number; veryLow: number; low: number; moderate: number };
   };
   reason: string;
@@ -36,7 +42,13 @@ export default function Housing() {
   const [results, setResults] = useState<Result[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [income, setIncome] = useState("");
+  const [householdSize, setHouseholdSize] = useState(1);
   const abort = useRef<AbortController | null>(null);
+
+  const ami100 = [0, 118800, 135700, 152700, 169600, 183200, 196800, 210400, 223900];
+  const annualIncome = Number(income.replace(/[^0-9.]/g, "")) || 0;
+  const householdAmi = annualIncome ? Math.round((annualIncome / ami100[householdSize]) * 100) : null;
 
   async function search(text: string) {
     abort.current?.abort();
@@ -112,6 +124,30 @@ export default function Housing() {
         </div>
       </div>
 
+      <div className="eligibility">
+        <label>
+          Annual household income
+          <input
+            inputMode="numeric"
+            value={income}
+            onChange={(e) => setIncome(e.target.value)}
+            placeholder="e.g. 65000"
+            aria-label="Annual household income"
+          />
+        </label>
+        <label>
+          Household size
+          <select value={householdSize} onChange={(e) => setHouseholdSize(Number(e.target.value))}>
+            {Array.from({ length: 8 }, (_, i) => i + 1).map((size) => (
+              <option key={size} value={size}>{size} {size === 1 ? "person" : "people"}</option>
+            ))}
+          </select>
+        </label>
+        <div className="ami-result">
+          {householdAmi ? <><b>{householdAmi}% AMI</b><span>2026 NYC estimate</span></> : <span>Add income to see your 2026 AMI</span>}
+        </div>
+      </div>
+
       <div className="presets">
         <span className="lbl">Try</span>
         {BRIEFS.map((b) => (
@@ -172,11 +208,15 @@ export default function Housing() {
         <section className="cart">
           <div className="cart-title">{results.length} places worth looking at</div>
           {results.map((r) => (
-            <div className="listing" key={r.listing.id}>
+            <div className={`listing${r.listing.imageUrl ? " with-image" : ""}`} key={r.listing.id}>
+              {r.listing.imageUrl ? (
+                <img className="listing-image" src={r.listing.imageUrl} alt={r.listing.name || r.listing.address} />
+              ) : null}
+              <div className="listing-body">
               <div className="l-head">
                 <span className="l-name">{r.listing.name || r.listing.address}</span>
                 <span className="l-rent">
-                  {r.listing.rent ? `$${r.listing.rent.toLocaleString()}/mo` : "rent not published"}
+                  {r.listing.rentRange || (r.listing.rent ? `$${r.listing.rent.toLocaleString()}/mo` : "rent not published")}
                 </span>
               </div>
               <div className="l-meta">
@@ -185,6 +225,14 @@ export default function Housing() {
                   .join(" · ")}
               </div>
               <div className="why">{r.reason}</div>
+              {r.listing.description ? <p className="l-description">{r.listing.description}</p> : null}
+              {annualIncome && (r.listing.minIncome || r.listing.maxIncome) ? (
+                <div className={`income-match ${annualIncome >= (r.listing.minIncome ?? 0) && annualIncome <= (r.listing.maxIncome ?? Infinity) ? "match" : "miss"}`}>
+                  {annualIncome >= (r.listing.minIncome ?? 0) && annualIncome <= (r.listing.maxIncome ?? Infinity)
+                    ? "Income is within the published range"
+                    : "Income is outside the published range"}
+                </div>
+              ) : householdAmi ? <div className="income-match">Your household is about {householdAmi}% AMI · verify the exact band in the application</div> : null}
               <div className="l-foot">
                 {typeof r.openViolations === "number" ? (
                   <span className={r.openViolations > 100 ? "vio bad" : "vio ok"}>
@@ -195,6 +243,12 @@ export default function Housing() {
                   <span className="vio">building record not checked</span>
                 )}
                 {r.listing.units ? <span className="l-units">{r.listing.units} units</span> : null}
+                {(r.listing.applicationUrl || r.listing.url) ? (
+                  <a className="apply-link" href={r.listing.applicationUrl || r.listing.url} target="_blank" rel="noreferrer">
+                    View application →
+                  </a>
+                ) : null}
+              </div>
               </div>
             </div>
           ))}

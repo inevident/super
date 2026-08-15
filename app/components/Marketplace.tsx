@@ -378,8 +378,8 @@ function DetailPanel({
                 </div>
               </section>
 
-              <a className="apply-button" href={listing.applyUrl} target="_blank" rel="noreferrer">Apply on Housing Connect <span>↗</span></a>
-              <p className="official-note">Super checks public records and eligibility bands. Applications and final determinations stay with NYC Housing Connect.</p>
+              <a className="apply-button" href={listing.applyUrl} target="_blank" rel="noreferrer">Apply <span>↗</span></a>
+              <p className="official-note">Super checks public records and eligibility bands. Applications and final determinations stay with the listing provider.</p>
             </div>
           </>
         ) : null}
@@ -435,7 +435,7 @@ export default function Marketplace() {
     } else if (event.stage === "plan") {
       setPlan(event.plan);
       setCheck("planning", `Brief parsed ${event.plan.generatedBy === "agent" ? "by the agent" : "with deterministic fallback"}`, "done");
-      setCheck("inventory", "Searching active Housing Connect lotteries", "active");
+      setCheck("inventory", "Searching active affordable housing sources", "active");
     } else if (event.stage === "inventory") {
       setCheck("inventory", `${event.count} active lotteries loaded${event.source === "snapshot" ? " from fallback snapshot" : " live"}`, "done");
       setCheck("eligibility", "Checking exact rent, bedroom, household, and income bands", "active");
@@ -610,7 +610,7 @@ export default function Marketplace() {
         <div className="hero-copy">
           <p className="eyebrow">Agentic rental marketplace · New York City</p>
           <h1>Find the apartment.<br />Precheck the building.</h1>
-          <p>Super matches your household to live Housing Connect units, verifies the income math, then reads the building&apos;s inspector-confirmed record before you apply.</p>
+          <p>Super matches your household to affordable housing opportunities, verifies the income math, then reads the building&apos;s inspector-confirmed record before you apply.</p>
         </div>
         <div className="hero-proof"><strong>3 checks Zillow skips</strong><span>Exact eligibility</span><span>Open HPD violations</span><span>One-time Precheck cost</span></div>
       </section>
@@ -672,7 +672,7 @@ export default function Marketplace() {
         <div className="map-pane"><CityMap markers={markers} selectedId={selectedId} onSelect={openListing} /></div>
       </section>
 
-      <footer className="market-footer"><span>Super uses public NYC data. Verify all terms with Housing Connect.</span><strong>Built for NYChackathon August 15th by Ryan Lim</strong></footer>
+      <footer className="market-footer"><span>Super uses public NYC and provider data. Verify all terms with the listing provider.</span><strong>Built for NYChackathon August 15th by Ryan Lim</strong></footer>
 
       {selectedId ? <DetailPanel listing={detail} loading={detailLoading} error={detailError} householdSize={Number(householdSize) || 1} onClose={closeListing} /> : null}
     </main>

@@ -33,6 +33,7 @@ export type Listing = {
 
 export type Query = {
   borough?: string;
+  boroughs?: string[];
   maxRent?: number;
   minBeds?: number;
   minUnits?: number;
@@ -103,9 +104,10 @@ export function searchListings(q: Query): Listing[] {
   const limit = Math.min(q.limit ?? 12, 40);
   let out = allListings();
 
-  if (q.borough) {
-    const want = norm(q.borough);
-    out = out.filter((l) => norm(l.borough).includes(want) || want.includes(norm(l.borough || "x")));
+  const wantedBoroughs = q.boroughs?.length ? q.boroughs : q.borough ? [q.borough] : [];
+  if (wantedBoroughs.length) {
+    const wanted = wantedBoroughs.map(norm);
+    out = out.filter((l) => wanted.some((want) => norm(l.borough).includes(want) || want.includes(norm(l.borough || "x"))));
   }
   if (q.withRentOnly) out = out.filter((l) => typeof l.rent === "number");
   if (typeof q.maxRent === "number") {

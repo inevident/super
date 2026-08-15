@@ -64,7 +64,7 @@ export default function ListingDetail({ listing }: { listing: Listing }) {
       <a className="detail-back" href="/housing">← Back to housing search</a>
       <section className="detail-hero">
         {images.length ? <div className="detail-gallery">
-          <img src={images[image]} alt={`${listing.name} · photo ${image + 1}`} />
+          <div className={`gallery-stage${images.length > 1 ? " has-thumbs" : ""}`}><img src={images[image]} alt={`${listing.name} · photo ${image + 1}`} />{images.length > 1 ? <div className="gallery-thumbs">{images.slice(0, 4).map((src, thumbIndex) => <button className={thumbIndex === image ? "active" : ""} key={src} onClick={() => setImage(thumbIndex)} aria-label={`Show photo ${thumbIndex + 1}`}><img src={src} alt="" /></button>)}</div> : null}</div>
           {images.length > 1 ? <><button className="gallery-arrow prev" onClick={() => setImage((image - 1 + images.length) % images.length)} aria-label="Previous image">‹</button><button className="gallery-arrow next" onClick={() => setImage((image + 1) % images.length)} aria-label="Next image">›</button><span className="gallery-count">{image + 1}/{images.length}</span></> : null}
         </div> : null}
         <div className="detail-copy">

@@ -88,6 +88,33 @@ export default function ProfileManager({
   }, [onProfileLoaded]);
 
   const handleSave = useCallback(() => {
+    // Validate required fields
+    const required: (keyof ProfileForm)[] = [
+      "firstName", "lastName", "phoneNumber", "emailAddress",
+      "address", "city", "state", "zipCode", "householdSize", "annualIncome",
+    ];
+    const missing = required.filter((k) => !form[k].trim());
+    if (missing.length > 0) {
+      alert("Please fill in: " + missing.join(", "));
+      return;
+    }
+    // Validate email
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.emailAddress)) {
+      alert("Please enter a valid email address.");
+      return;
+    }
+    // Validate ZIP
+    if (!/^\d{5}$/.test(form.zipCode)) {
+      alert("Please enter a valid 5-digit ZIP code.");
+      return;
+    }
+    // Validate income
+    const income = Number(form.annualIncome);
+    if (!Number.isFinite(income) || income < 0 || income > 10_000_000) {
+      alert("Please enter a valid annual income.");
+      return;
+    }
+
     const now = new Date().toISOString();
     const updated: RenterProfile = profile
       ? { ...profile, metadata: { ...profile.metadata, updatedAt: now } }

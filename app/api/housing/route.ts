@@ -56,12 +56,10 @@ export async function POST(req: Request) {
         if (!results || results.length < 2) {
           send({ stage: "searching", message: "Matching listings…" });
           const brief_ = String(brief ?? "").toLowerCase();
-          const borough = ["manhattan", "brooklyn", "bronx", "queens", "staten"].find((b) =>
-            brief_.includes(b)
-          );
+          const boroughs = ["manhattan", "brooklyn", "bronx", "queens", "staten island"].filter((borough) => brief_.includes(borough));
           const rentMatch = brief_.match(/\$?\s?([0-9][0-9,]{2,5})/);
           const picks = searchListings({
-            borough,
+            boroughs,
             maxRent: rentMatch ? Number(rentMatch[1].replace(/,/g, "")) : undefined,
             limit: 6,
           });

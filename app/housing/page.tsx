@@ -18,6 +18,7 @@ type Result = {
     source: string;
     url?: string;
     imageUrl?: string;
+    imageUrls?: string[];
     description?: string;
     applicationUrl?: string;
     rentRange?: string;
@@ -44,6 +45,7 @@ export default function Housing() {
   const [error, setError] = useState("");
   const [income, setIncome] = useState("");
   const [householdSize, setHouseholdSize] = useState(1);
+  const [gallery, setGallery] = useState<Record<string, number>>({});
   const abort = useRef<AbortController | null>(null);
 
   const ami100 = [0, 118800, 135700, 152700, 169600, 183200, 196800, 210400, 223900];
@@ -208,13 +210,29 @@ export default function Housing() {
         <section className="cart">
           <div className="cart-title">{results.length} places worth looking at</div>
           {results.map((r) => (
-            <div className={`listing${r.listing.imageUrl ? " with-image" : ""}`} key={r.listing.id}>
-              {r.listing.imageUrl ? (
-                <img className="listing-image" src={r.listing.imageUrl} alt={r.listing.name || r.listing.address} />
-              ) : null}
+            <div className={`listing${r.listing.imageUrl || r.listing.imageUrls?.length ? " with-image" : ""}`} key={r.listing.id}>
+              {(() => {
+                const images = r.listing.imageUrls?.length ? r.listing.imageUrls : r.listing.imageUrl ? [r.listing.imageUrl] : [];
+                const index = Math.min(gallery[r.listing.id] ?? 0, Math.max(0, images.length - 1));
+                if (!images.length) return null;
+                return (
+                  <div className="listing-gallery">
+                    <a href={`/housing/${encodeURIComponent(r.listing.id)}`} aria-label={`View ${r.listing.name || r.listing.address}`}>
+                      <img className="listing-image" src={images[index]} alt={`${r.listing.name || r.listing.address} · photo ${index + 1}`} />
+                    </a>
+                    {images.length > 1 ? (
+                      <>
+                        <button className="gallery-arrow prev" aria-label="Previous image" onClick={() => setGallery((g) => ({ ...g, [r.listing.id]: (index - 1 + images.length) % images.length }))}>‹</button>
+                        <button className="gallery-arrow next" aria-label="Next image" onClick={() => setGallery((g) => ({ ...g, [r.listing.id]: (index + 1) % images.length }))}>›</button>
+                        <span className="gallery-count">{index + 1}/{images.length}</span>
+                      </>
+                    ) : null}
+                  </div>
+                );
+              })()}
               <div className="listing-body">
               <div className="l-head">
-                <span className="l-name">{r.listing.name || r.listing.address}</span>
+                <a className="l-name listing-detail-link" href={`/housing/${encodeURIComponent(r.listing.id)}`}>{r.listing.name || r.listing.address}</a>
                 <span className="l-rent">
                   {r.listing.rentRange || (r.listing.rent ? `$${r.listing.rent.toLocaleString()}/mo` : "rent not published")}
                 </span>

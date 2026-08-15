@@ -25,6 +25,7 @@ export type Listing = {
   started?: string;
   url?: string;
   imageUrl?: string;
+  imageUrls?: string[];
   description?: string;
   applicationUrl?: string;
   rentRange?: string;
@@ -90,6 +91,10 @@ export function allListings(): Listing[] {
     cache = [];
   }
   return cache;
+}
+
+export function getListing(id: string): Listing | null {
+  return allListings().find((listing) => listing.id === id) ?? null;
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");

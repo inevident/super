@@ -12,9 +12,78 @@
 
 **Current limitation:** Autofill 1.0 saves the user's profile and shows a clipboard panel — the user still has to paste each field manually into Housing Connect's form. It reduces errors but not effort.
 
-**Goal for 2.0:** Use browser automation (Selenium / Playwright / Puppeteer) to fill out Housing Connect applications *automatically* — from the user's saved profile straight to the submit button. The user reviews and clicks submit; the agent does everything else.
+**Goal for 2.0:** Use browser automation (Playwright / Selenium) to fill out Housing Connect applications *automatically* — from the user's saved profile straight to the submit button. The user reviews and clicks submit; the agent does everything else.
+
+**UX principle:** The autofill interface is a persistent, bottom-center panel — always visible, never in the way, instantly accessible. Think "Spotify mini-player" but for your housing info.
 
 **Who it's for:** The same active affordable housing applicants, now with near-zero-effort applications.
+
+---
+
+## UX Vision: The Bottom-Center Autofill Panel
+
+### Where it lives
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Browser Window                          │
+│                                                             │
+│                                                             │
+│                                                             │
+│         (Housing Connect form fills most of the page)       │
+│                                                             │
+│                                                             │
+│                                                             │
+│                                                             │
+│                                                             │
+│                                                             │
+│                                                             │
+│                                                             │
+│                                                             │
+│         ┌─────────────────────────────────────┐             │
+│         │  🏠 Super Autofill    [─] [□] [×]   │  ← Draggable│
+│         │  ─────────────────────────────────  │             │
+│         │  ✓ First Name: Jane                 │             │
+│         │  ✓ Last Name: Doe                   │             │
+│         │  ✓ Phone: (555) 123-4567           │             │
+│         │  ✓ Email: jane@example.com          │             │
+│         │  ✓ Address: 123 Main St #4B         │             │
+│         │  ✓ City: Brooklyn, NY 11201         │             │
+│         │  ✓ Household: 2                     │             │
+│         │  ✓ Income: $75,000                  │             │
+│         │  ─────────────────────────────────  │             │
+│         │  [Copy All]  [Fill Form]  [Review]   │             │
+│         └─────────────────────────────────────┘             │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Why bottom-center?
+
+- **Always visible** — doesn't scroll away, doesn't overlap form content
+- **Non-modal** — user can still interact with the page underneath
+- **Draggable** — can be moved if it covers something important
+- **Familiar pattern** — chat widgets, music players, and help desks use this position
+- **Mobile-friendly** — bottom of screen is easiest to reach on phones
+
+### Panel states
+
+| State | What it shows | When |
+|-------|---------------|------|
+| **Collapsed** | Small pill: "🏠 Super Autofill — 8 fields ready" | Default when on Housing Connect |
+| **Expanded** | Full panel with all fields, copy buttons, fill/review actions | User clicks to expand |
+| **Recording** | Border turns blue, "Recording your inputs..." | User opted to record a new form |
+| **Filling** | Progress bar + field-by-field status | Agent is auto-filling |
+| **Review** | Side-by-side diff before submit | Agent filled everything, awaiting confirmation |
+| **Success** | Green check + confirmation ID | After successful submission |
+| **Error** | Red highlight + retry button + "Ask user" for CAPTCHA | Something went wrong |
+
+### Accessibility
+
+- Keyboard navigable (Tab through fields, Enter to copy/fill)
+- Screen-reader friendly (ARIA live regions announce status changes)
+- High-contrast mode support
+- Responsive: full-width on mobile, floating card on desktop
 
 ---
 
@@ -50,7 +119,7 @@ We need a plan that is **technically feasible**, **legally safe**, and **respect
 
 ---
 
-## How It Works — The Automated Application Loop
+## How It Works — The Seamless Application Loop
 
 ### Phase 1: Setup (One-time)
 
@@ -60,24 +129,31 @@ We need a plan that is **technically feasible**, **legally safe**, and **respect
 4. User sets up their profile in Super (same as v1.0 — name, phone, email, address, household, income)
 5. User optionally uploads documents (income verification) to a local folder for the agent to attach
 
-### Phase 2: Apply (Per lottery)
+### Phase 2: Apply (Per lottery) — Seamless UX
 
 1. User finds a lottery in Super and clicks "Apply with Super"
 2. The agent launches a Playwright-controlled browser with the user's Chrome profile
 3. Navigates to the Housing Connect application URL for that lottery
-4. Waits for the form to load (handles dynamic rendering)
-5. Auto-fills all 11 fields from the saved profile
-6. Handles conditional fields (e.g., "add household member") by prompting the user via overlay
-7. Attaches documents from the local folder if required
-8. If CAPTCHA appears — pauses and alerts the user to solve it manually
-9. Shows a review overlay: "Here's what I filled. Submit?"
-10. User clicks "Submit" (or the agent submits after explicit confirmation)
+4. **Bottom-center panel appears automatically** — "Ready to fill"
+5. User clicks "Fill Form" in the panel
+6. Agent auto-fills all 11 fields from the saved profile — panel shows real-time progress:
+   - ✓ First Name filled
+   - ✓ Last Name filled
+   - ✓ Phone filled
+   - ... (each field lights up as it's filled)
+7. Handles conditional fields (e.g., "add household member") by prompting the user via panel overlay
+8. Attaches documents from the local folder if required
+9. If CAPTCHA appears — panel pulses orange: "Please solve the CAPTCHA, then click Resume"
+10. Panel switches to Review mode: side-by-side diff with Edit capability
+11. User clicks "Confirm & Submit" in the panel
+12. Panel shows: "Submitting..." → "Submitted! Confirmation: #12345"
 
 ### Phase 3: Post-submit
 
 1. Agent captures the confirmation page / application ID
 2. Saves the submission record to the user's local profile
-3. Returns control to Super with a success/failure status
+3. Panel shows success state with application history link
+4. User can dismiss panel or keep it open for next application
 
 ---
 
@@ -98,12 +174,13 @@ We need a plan that is **technically feasible**, **legally safe**, and **respect
 │  │  3. Navigate to Housing Connect application URL              │   │
 │  │  4. Detect form fields (id, name, aria-label)                │   │
 │  │  5. Fill fields from profile                                 │   │
-│  │  6. Handle conditional fields → prompt user                  │   │
+│  │  6. Handle conditional fields → prompt user via panel        │   │
 │  │  7. Attach documents if needed                               │   │
-│  │  8. CAPTCHA? → pause, alert user, wait for solve             │   │
-│  │  9. Show review overlay → user confirms                      │   │
-│  │  10. Submit (or let user click submit)                       │   │
+│  │  8. CAPTCHA? → pause, alert user via panel, wait for solve   │   │
+│  │  9. Show review in panel → user confirms                     │   │
+│  │  10. Submit (or let user click submit in panel)              │   │
 │  │  11. Capture confirmation → save to profile                  │   │
+│  │  12. Panel shows success + application history               │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │       │                                                             │
 │       ▼                                                             │
@@ -113,6 +190,20 @@ We need a plan that is **technically feasible**, **legally safe**, and **respect
 │  │  - Already logged in to Housing Connect                      │   │
 │  │  - Agent drives this browser via Playwright CDP connection   │   │
 │  │  - User can see everything happening in real-time            │   │
+│  │                                                              │   │
+│  │  ┌─────────────────────────────────────────────────────┐     │   │
+│  │  │  Bottom-Center Autofill Panel                       │     │   │
+│  │  │  ✓ First Name: Jane        [✓]                     │     │   │
+│  │  │  ✓ Last Name: Doe          [✓]                     │     │   │
+│  │  │  ✓ Phone: (555) 123-4567  [✓]                     │     │   │
+│  │  │  ✓ Email: jane@example.com [✓]                     │     │   │
+│  │  │  ✓ Address: 123 Main St   [✓]                     │     │   │
+│  │  │  ✓ City: Brooklyn, NY     [✓]                     │     │   │
+│  │  │  ✓ Household: 2           [✓]                     │     │   │
+│  │  │  ✓ Income: $75,000        [✓]                     │     │   │
+│  │  │  ─────────────────────────────────                 │     │   │
+│  │  │  [Copy All] [Fill Form] [Review]                   │     │   │
+│  │  └─────────────────────────────────────────────────────┘     │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -199,8 +290,7 @@ async function fillWithRetry(selector: string, value: string, maxRetries = 3) {
 **Solution:** The agent never acts autonomously on edge cases. Instead:
 
 - Pauses automation
-- Highlights the issue on screen
-- Shows a prompt: "Please solve the CAPTCHA, then click Resume"
+- Panel pulses orange with message: "Please solve the CAPTCHA, then click Resume"
 - Waits for user input before continuing
 
 ### 6. Application History & Dedup
@@ -226,7 +316,7 @@ Before applying, the agent checks: "You already applied to this lottery on <date
 
 **Problem:** What if the agent fills something wrong?
 
-**Solution:** Before submitting, the agent shows a diff:
+**Solution:** Before submitting, the panel shows a diff:
 
 ```
 Field          | Stored Value        | Form Value
@@ -237,7 +327,7 @@ Income         | $75,000             | $75,000
 Address        | 123 Main St         | 123 Main St
 ```
 
-User can edit any field before confirming.
+User can edit any field in the panel before confirming.
 
 ---
 
@@ -318,7 +408,14 @@ User can edit any field before confirming.
 - [ ] Identify anti-bot measures (CAPTCHA type, rate limits, honeypots)
 - [ ] Document form submission API (intercept network requests during manual submit)
 
-### Task 2: Playwright Agent Core
+### Task 2: Bottom-Center Panel UI
+- [ ] Build draggable, floating panel component (bottom-center positioning)
+- [ ] Implement collapsed/expanded states
+- [ ] Implement recording/filling/review/success/error states
+- [ ] Add keyboard navigation and screen reader support
+- [ ] Make responsive (full-width on mobile, floating card on desktop)
+
+### Task 3: Playwright Agent Core
 - [ ] Install Playwright and set up Chromium
 - [ ] Implement `launchWithProfile(userDataDir)` — reuse Chrome sessions
 - [ ] Implement `navigateToApplication(url)` — open Housing Connect lottery
@@ -326,47 +423,47 @@ User can edit any field before confirming.
 - [ ] Implement `fillField(selector, value)` — fill with retry + auto-wait
 - [ ] Implement `fillAllFields(profile)` — fill entire form from profile
 
-### Task 3: Conditional Field Handling
+### Task 4: Conditional Field Handling
 - [ ] Detect conditional fields (shown/hidden based on other answers)
 - [ ] Implement `handleConditionalFields()` — prompt user for decisions
 - [ ] Save conditional decisions per URL pattern for future use
 
-### Task 4: Document Attachment
+### Task 5: Document Attachment
 - [ ] Implement `attachDocument(filePath)` — upload income verification
 - [ ] Set up local document folder watcher
 - [ ] Map document types to form upload fields
 
-### Task 5: Human-in-the-Loop System
-- [ ] Implement CAPTCHA detection → pause + alert user
-- [ ] Implement review overlay before submission
-- [ ] Implement "Submit" confirmation button (user clicks)
+### Task 6: Human-in-the-Loop System
+- [ ] Implement CAPTCHA detection → pause + panel alert
+- [ ] Implement review mode in panel before submission
+- [ ] Implement "Submit" confirmation button in panel
 - [ ] Implement undo/edit on review overlay
 
-### Task 6: Application History
+### Task 7: Application History
 - [ ] Save submitted applications to local profile
 - [ ] Check for duplicate applications before submitting
-- [ ] Show application history in Super UI
+- [ ] Show application history in panel
 
-### Task 7: Super Web App Integration
+### Task 8: Super Web App Integration
 - [ ] Add "Apply with Super" button to listing detail
 - [ ] Build browser extension bridge (if needed)
-- [ ] Add application queue UI
-- [ ] Add application history view
+- [ ] Add application queue UI to panel
+- [ ] Add application history view to panel
 
-### Task 8: Error Handling & Edge Cases
+### Task 9: Error Handling & Edge Cases
 - [ ] Handle session expiry → prompt user to re-login
 - [ ] Handle form layout changes → re-map fields
 - [ ] Handle network errors → retry with backoff
-- [ ] Handle validation errors → highlight fields, show messages
+- [ ] Handle validation errors → highlight fields in panel
 
-### Task 9: Testing & QA
+### Task 10: Testing & QA
 - [ ] Test on Housing Connect (dry-run mode — don't submit)
 - [ ] Test with different lottery types (rental, sales, senior)
 - [ ] Test document upload flow
 - [ ] Test CAPTCHA handling
 - [ ] Test duplicate detection
 
-### Task 10: Documentation
+### Task 11: Documentation
 - [ ] Document setup (Playwright install, Chrome profile path)
 - [ ] Document legal/ToS considerations
 - [ ] Add in-app explanations of what the agent does

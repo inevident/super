@@ -648,6 +648,8 @@ a { color: inherit; }
 
 /* ---------- housing listings ---------- */
 
+.housing-shell { max-width: 1180px; }
+
 .listing {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -657,6 +659,7 @@ a { color: inherit; }
   flex-direction: column;
   gap: 6px;
 }
+.housing-results { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); align-items: stretch; gap: 16px; }.housing-results .cart-title { grid-column: 1 / -1; margin-bottom: 2px; }.housing-results .listing { min-width: 0; height: 100%; }.housing-results .gallery-stage { min-height: 220px; height: 220px; }.housing-results .gallery-stage.has-thumbs { grid-template-columns: minmax(0,4fr) 78px; }.housing-results .gallery-thumbs img { max-height: 72px; }.housing-results .listing-body { flex: 1; padding: 14px; }.housing-results .l-head { display: block; }.housing-results .l-name { display: block; font-size: 17px; line-height: 1.2; }.housing-results .l-rent { display: block; margin-top: 7px; font-size: 15px; }.housing-results .l-description { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }.housing-results .l-foot { margin-top: auto; padding-top: 8px; gap: 8px 12px; }.housing-results .scan-shop-link { flex-basis: 100%; margin-left: 0; }.housing-results .apply-link { margin-left: 0; }.housing-results .gallery-arrow { width: 32px; height: 32px; font-size: 22px; }.housing-results .gallery-arrow.prev { left: 8px; }.housing-results .gallery-arrow.next { right: 8px; }
 .listing.with-image { padding: 0; overflow: hidden; }
 .listing-gallery { position: relative; background: var(--line-soft); }
 .gallery-stage { display: grid; min-height: 360px; background: #f4f3ef; }.gallery-stage.has-thumbs { grid-template-columns: minmax(0, 3fr) minmax(105px, 1fr); }.gallery-stage > a { display: grid; min-width: 0; }.gallery-stage > a > img,.gallery-stage > img { width: 100%; height: 100%; object-fit: contain; background: #f4f3ef; }.gallery-thumbs { display: grid; grid-auto-rows: 1fr; gap: 3px; padding-left: 3px; min-width: 0; }.gallery-thumbs button { padding: 0; border: 0; min-height: 0; overflow: hidden; background: white; cursor: pointer; opacity: .68; }.gallery-thumbs button.active { opacity: 1; box-shadow: inset 0 0 0 3px var(--ink); }.gallery-thumbs img { width: 100%; height: 100%; max-height: 125px; object-fit: contain; background: white; }
@@ -762,4 +765,6 @@ a { color: inherit; }
   .item .thumb { width: 44px; height: 44px; }
   .item .price { grid-column: 2; text-align: left; }
 }
+@media (max-width: 900px) { .housing-results { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 620px) { .housing-results { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .detail-hero,.detail-map-section { grid-template-columns: 1fr; }.detail-gallery,.detail-gallery .gallery-stage { min-height: 300px; }.detail-copy { padding: 24px; }.detail-signals { grid-template-columns: 1fr; }.gallery-stage { min-height: 280px; }.gallery-stage.has-thumbs { grid-template-columns: minmax(0, 4fr) minmax(82px, 1fr); } }

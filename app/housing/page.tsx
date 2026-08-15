@@ -112,7 +112,7 @@ export default function Housing() {
   }, []);
 
   return (
-    <main className="shell">
+    <main className="shell housing-shell">
       <header className="top">
         <div className="wordmark">Super · Housing</div>
         <h1 className="tagline">Find a place. Know the building.</h1>
@@ -197,7 +197,7 @@ export default function Housing() {
       {error && <div className="error">{error}</div>}
 
       {results && results.length > 0 && (
-        <section className="cart">
+        <section className="cart housing-results">
           <div className="cart-title">{results.length} places worth looking at</div>
           {results.map((r) => (
             <div className={`listing${r.listing.imageUrl || r.listing.imageUrls?.length ? " with-image" : ""}`} key={r.listing.id}>

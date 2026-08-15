@@ -58,18 +58,19 @@ function unique<T>(items: T[]) {
   return [...new Set(items)];
 }
 
-function replaceListingQuery(id: string | null) {
+function replaceListingQuery(id: string | null, push = false) {
   const url = new URL(window.location.href);
   if (id) url.searchParams.set("listing", id);
   else url.searchParams.delete("listing");
-  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  window.history[push ? "pushState" : "replaceState"](window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 function safeImageSource(source: string | undefined | null) {
   if (!source) return false;
+  if (source.startsWith("/")) return true;
   try {
     const host = new URL(source).hostname;
-    return host === "a806-housingconnectapi.nyc.gov" || host === "cdn.shopify.com";
+    return ["a806-housingconnectapi.nyc.gov", "cdn.shopify.com", "www.nychdc.com", "nychdc.com", "residenewyork.com", "www.residenewyork.com", "fifthave.org", "www.fifthave.org"].includes(host);
   } catch {
     return false;
   }
@@ -473,6 +474,12 @@ export default function Marketplace() {
       setError("Enter what you need, household size, and annual household income.");
       return;
     }
+    const searchUrl = new URL(window.location.href);
+    searchUrl.searchParams.set("brief", input.brief);
+    searchUrl.searchParams.set("household", String(input.householdSize));
+    searchUrl.searchParams.set("income", String(input.annualIncome));
+    searchUrl.searchParams.delete("listing");
+    window.history.replaceState(window.history.state, "", `${searchUrl.pathname}${searchUrl.search}${searchUrl.hash}`);
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
@@ -522,7 +529,7 @@ export default function Marketplace() {
 
   const openListing = useCallback(
     async (id: string, updateUrl = true) => {
-      if (updateUrl) replaceListingQuery(id);
+      if (updateUrl) replaceListingQuery(id, true);
       setSelectedId(id);
       setDetail(allListings.find((listing) => listing.id === id) ?? null);
       setDetailLoading(true);
@@ -553,9 +560,32 @@ export default function Marketplace() {
   useEffect(() => {
     if (initialDeepLinkHandled.current) return;
     initialDeepLinkHandled.current = true;
-    const id = new URLSearchParams(window.location.search).get("listing");
+    const params = new URLSearchParams(window.location.search);
+    const savedBrief = params.get("brief");
+    const savedHousehold = params.get("household");
+    const savedIncome = params.get("income");
+    if (savedBrief) setBrief(savedBrief);
+    if (savedHousehold) setHouseholdSize(savedHousehold);
+    if (savedIncome) setAnnualIncome(savedIncome);
+    const id = params.get("listing");
     if (id) void openListing(id, false);
   }, [openListing]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const id = new URLSearchParams(window.location.search).get("listing");
+      if (!id) {
+        setSelectedId(null);
+        setDetail(null);
+        setDetailError("");
+        setDetailLoading(false);
+      } else if (id !== selectedId) {
+        void openListing(id, false);
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [openListing, selectedId]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

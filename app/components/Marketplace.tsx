@@ -58,6 +58,29 @@ function unique<T>(items: T[]) {
   return [...new Set(items)];
 }
 
+function subwayColor(line: string) {
+  if (/^[123]$/.test(line)) return { background: "#EE352E", color: "#fff" };
+  if (/^[456]$/.test(line)) return { background: "#00933C", color: "#fff" };
+  if (line === "7") return { background: "#B933AD", color: "#fff" };
+  if (/^[ACE]$/.test(line)) return { background: "#0039A6", color: "#fff" };
+  if (/^[BDFM]$/.test(line)) return { background: "#FF6319", color: "#fff" };
+  if (line === "G") return { background: "#6CBE45", color: "#fff" };
+  if (/^[JZ]$/.test(line)) return { background: "#996633", color: "#fff" };
+  if (/^[LS]$/.test(line)) return { background: "#A7A9AC", color: "#111" };
+  if (/^[NQRW]$/.test(line)) return { background: "#FCCC0A", color: "#111" };
+  return { background: "#555", color: "#fff" };
+}
+
+function SubwayLines({ lines }: { lines: string[] }) {
+  const routes = unique(lines.map((line) => line.trim().toUpperCase()).filter(Boolean));
+  return (
+    <div className="subway-lines" aria-label={routes.length ? `Subway lines ${routes.join(", ")}` : "Subway lines unavailable"}>
+      <span>Subway lines</span>
+      {routes.length ? routes.map((line) => <i key={line} style={subwayColor(line)}>{line}</i>) : <em>lookup unavailable</em>}
+    </div>
+  );
+}
+
 function replaceListingQuery(id: string | null, push = false) {
   const url = new URL(window.location.href);
   if (id) url.searchParams.set("listing", id);
@@ -146,6 +169,7 @@ function ListingCard({
             {[listing.neighborhood, listing.borough].filter(Boolean).join(", ")} · {listing.address}
           </p>
           <p className="card-units">{availableUnits || listing.units} available · {bedrooms || "Unit mix available"}</p>
+          <SubwayLines lines={listing.transit} />
           {listing.eligibility.reasons.length ? (
             <p className="near-reason">{listing.eligibility.reasons.join(" · ")}</p>
           ) : (
@@ -300,7 +324,7 @@ function DetailPanel({
                 </div>
                 <div>
                   <div className="section-kicker">Nearby transit</div>
-                  <h3>{listing.transit.length ? `${listing.transit.join(" · ")} trains` : "Transit details unavailable"}</h3>
+                  <SubwayLines lines={listing.transit} />
                   <ul className="nearby-list">
                     {listing.nearby.filter((place) => /Subway|Train/i.test(place.type)).slice(0, 5).map((place) => (
                       <li key={`${place.name}-${place.train}`}>{place.name}{place.train ? ` · ${place.train}` : ""}</li>

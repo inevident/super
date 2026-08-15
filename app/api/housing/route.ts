@@ -53,15 +53,20 @@ export async function POST(req: Request) {
 
         // Deterministic fallback: plain filtered search, so the marketplace always
         // returns something even with no key or a rate-limited model.
-        if (!results || results.length < 2) {
+        if (!results || results.length < 15) {
           send({ stage: "searching", message: "Matching listings…" });
           const brief_ = String(brief ?? "").toLowerCase();
           const boroughs = ["manhattan", "brooklyn", "bronx", "queens", "staten island"].filter((borough) => brief_.includes(borough));
-          const rentMatch = brief_.match(/\$?\s?([0-9][0-9,]{2,5})/);
+          const incomeMatch = brief_.match(/household income\s*\$?\s*([0-9][0-9,]{2,8})/);
+          const rentMatch = brief_.match(/(?:under|max(?:imum)?(?: rent)?|budget(?: of)?)\s*\$?\s*([0-9][0-9,]{2,5})/);
+          const priorityMatch = brief_.match(/priority:\s*([^;]+)/);
           const picks = searchListings({
             boroughs,
+            annualIncome: incomeMatch ? Number(incomeMatch[1].replace(/,/g, "")) : undefined,
+            sortBy: priorityMatch?.[1] ?? "newest listed",
+            actionableOnly: true,
             maxRent: rentMatch ? Number(rentMatch[1].replace(/,/g, "")) : undefined,
-            limit: 6,
+            limit: 5000,
           });
 
           // Check the buildings even on the fallback path. "We tell you which

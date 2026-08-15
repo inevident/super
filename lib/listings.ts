@@ -23,11 +23,21 @@ export type Listing = {
   maxIncome?: number;
   incomeBands?: { extremelyLow: number; veryLow: number; low: number; moderate: number };
   started?: string;
+  listedDate?: string;
   url?: string;
+  imageUrl?: string;
+  imageUrls?: string[];
+  description?: string;
+  applicationUrl?: string;
+  rentRange?: string;
 };
 
 export type Query = {
   borough?: string;
+  boroughs?: string[];
+  annualIncome?: number;
+  sortBy?: string;
+  actionableOnly?: boolean;
   maxRent?: number;
   minBeds?: number;
   minUnits?: number;
@@ -41,22 +51,75 @@ export function allListings(): Listing[] {
   if (cache) return cache;
   try {
     const raw = readFileSync(join(process.cwd(), "public", "listings.json"), "utf8");
-    cache = (JSON.parse(raw).listings ?? []) as Listing[];
+    const legacy = ((JSON.parse(raw).listings ?? []) as Listing[]).map((listing) => {
+      if (listing.source !== "fifthave") return listing;
+      if (listing.rent === 2732.32) return {
+        ...listing,
+        name: "The Axel - Unit 6F",
+        address: "539 Vanderbilt Avenue, Brooklyn, NY",
+        description: "Studio re-rental for a 1-2 person household, marketed by Fifth Avenue Committee.",
+        imageUrl: "https://fifthave.org/wp-content/uploads/2022/05/539-Vanderbilt-Avenue-in-Clinton-Hill-Brooklyn-777x1109-1.jpeg",
+        applicationUrl: "https://fifthave.my.site.com/",
+      };
+      if (listing.rent === 980) return {
+        ...listing,
+        name: "Paseo on Fifth - Unit N-308",
+        address: "Brooklyn, NY",
+        description: "Two-bedroom re-rental for a 1-5 person household, marketed by Fifth Avenue Committee.",
+        imageUrl: "https://fifthave.org/wp-content/uploads/2025/06/30893376.jpg",
+        applicationUrl: "https://fifthave.my.site.com/",
+      };
+      return { ...listing, name: "551 Warren Street re-rental", address: "551 Warren Street, Brooklyn, NY" };
+    });
+    const hdcRaw = readFileSync(join(process.cwd(), "public", "hdc-listings.json"), "utf8");
+    const providerRaw = readFileSync(join(process.cwd(), "public", "provider-listings.json"), "utf8");
+    const provider = (JSON.parse(providerRaw) as Listing[]).map((listing) => ({ ...listing, affordable: true }));
+    const hdc = (JSON.parse(hdcRaw) as Omit<Listing, "id" | "source" | "affordable">[]).map((listing) => {
+      const slug = `${listing.name}-${listing.address}`
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
+      const rents = (listing.rentRange?.match(/[\d,]+(?:\.\d+)?/g) ?? []).map((value) =>
+        Number(value.replace(/,/g, "")),
+      );
+      return {
+        ...listing,
+        id: `nychdc-${slug}`,
+        source: "nychdc",
+        affordable: true,
+        rent: rents[0],
+        url: listing.applicationUrl,
+      } as Listing;
+    });
+    const publicationDate = (listing: Listing) => {
+      const source = `${listing.applicationUrl ?? ""} ${listing.imageUrl ?? ""} ${listing.url ?? ""}`;
+      const match = source.match(/\/(20\d{2})[-/](0?[1-9]|1[0-2])(?:[-/](0?[1-9]|[12]\d|3[01]))?/);
+      if (match) return `${match[1]}-${match[2].padStart(2, "0")}-${(match[3] ?? "01").padStart(2, "0")}`;
+      return listing.started?.slice(0, 10);
+    };
+    cache = [...provider, ...hdc, ...legacy].map((listing) => ({ ...listing, listedDate: listing.listedDate ?? publicationDate(listing) }));
   } catch {
     cache = [];
   }
   return cache;
 }
 
+export function getListing(id: string): Listing | null {
+  return allListings().find((listing) => listing.id === id) ?? null;
+}
+
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
 
 export function searchListings(q: Query): Listing[] {
-  const limit = Math.min(q.limit ?? 12, 40);
+  const limit = Math.min(q.limit ?? 12, 100);
   let out = allListings();
 
-  if (q.borough) {
-    const want = norm(q.borough);
-    out = out.filter((l) => norm(l.borough).includes(want) || want.includes(norm(l.borough || "x")));
+  if (q.actionableOnly) out = out.filter((listing) => listing.source !== "hpd" || Boolean(listing.rent || listing.applicationUrl || listing.url));
+
+  const wantedBoroughs = q.boroughs?.length ? q.boroughs : q.borough ? [q.borough] : [];
+  if (wantedBoroughs.length) {
+    const wanted = wantedBoroughs.map(norm);
+    out = out.filter((l) => wanted.some((want) => norm(l.borough).includes(want) || want.includes(norm(l.borough || "x"))));
   }
   if (q.withRentOnly) out = out.filter((l) => typeof l.rent === "number");
   if (typeof q.maxRent === "number") {
@@ -68,9 +131,30 @@ export function searchListings(q: Query): Listing[] {
 
   // Listings with a real rent first — they are the ones a renter can act on.
   out = [...out].sort((a, b) => {
+    if ((q.sortBy ?? "newest listed").includes("newest")) {
+      const dateDifference = Date.parse(b.listedDate ?? "1970-01-01") - Date.parse(a.listedDate ?? "1970-01-01");
+      if (dateDifference) return dateDifference;
+    }
+    if (q.annualIncome) {
+      const incomeScore = (listing: Listing) => {
+        if (listing.minIncome || listing.maxIncome) {
+          if (q.annualIncome! < (listing.minIncome ?? 0)) return (listing.minIncome! - q.annualIncome!) / q.annualIncome!;
+          if (q.annualIncome! > (listing.maxIncome ?? Infinity)) return (q.annualIncome! - listing.maxIncome!) / q.annualIncome!;
+          return 0;
+        }
+        if (listing.rent) return Math.abs(Math.log(q.annualIncome! / (listing.rent * 40)));
+        return 2;
+      };
+      const incomeDifference = incomeScore(a) - incomeScore(b);
+      if (incomeDifference) return incomeDifference;
+    }
     const ar = a.rent ? 0 : 1;
     const br = b.rent ? 0 : 1;
     if (ar !== br) return ar - br;
+    if (q.sortBy?.includes("cheapest")) return (a.rent ?? Infinity) - (b.rent ?? Infinity);
+    const ag = (a.imageUrls?.length ?? 0) > 1 ? 0 : 1;
+    const bg = (b.imageUrls?.length ?? 0) > 1 ? 0 : 1;
+    if (ag !== bg) return ag - bg;
     return (b.units ?? 0) - (a.units ?? 0);
   });
 
@@ -78,7 +162,8 @@ export function searchListings(q: Query): Listing[] {
   // so the results are not five identical studios.
   const seen = new Set<string>();
   const deduped = out.filter((l) => {
-    const key = `${l.source}|${l.name}|${l.rent ?? ""}|${l.unitSize ?? ""}|${l.address}`;
+    const canonical = (value: string) => value.toLowerCase().replace(/\b(apartments?|llc|phase)\b/g, "").replace(/[^a-z0-9]/g, "");
+    const key = `${canonical(l.name)}|${canonical(l.address)}|${l.rent ?? ""}|${l.unitSize ?? ""}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

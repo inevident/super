@@ -58,6 +58,13 @@ function unique<T>(items: T[]) {
   return [...new Set(items)];
 }
 
+function replaceListingQuery(id: string | null) {
+  const url = new URL(window.location.href);
+  if (id) url.searchParams.set("listing", id);
+  else url.searchParams.delete("listing");
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
 function safeImageSource(source: string | undefined | null) {
   if (!source) return false;
   try {
@@ -396,6 +403,7 @@ export default function Marketplace() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const abort = useRef<AbortController | null>(null);
+  const initialDeepLinkHandled = useRef(false);
 
   const allListings = useMemo(() => {
     const source = exact.length || near.length ? [...exact, ...near] : partial;
@@ -477,6 +485,8 @@ export default function Marketplace() {
     setError("");
     setSelectedId(null);
     setDetail(null);
+    setDetailError("");
+    replaceListingQuery(null);
     try {
       const response = await fetch("/api/marketplace/search", {
         method: "POST",
@@ -511,7 +521,8 @@ export default function Marketplace() {
   }
 
   const openListing = useCallback(
-    async (id: string) => {
+    async (id: string, updateUrl = true) => {
+      if (updateUrl) replaceListingQuery(id);
       setSelectedId(id);
       setDetail(allListings.find((listing) => listing.id === id) ?? null);
       setDetailLoading(true);
@@ -531,16 +542,28 @@ export default function Marketplace() {
     [allListings, annualIncome, brief, householdSize]
   );
 
+  const closeListing = useCallback(() => {
+    setSelectedId(null);
+    setDetail(null);
+    setDetailError("");
+    setDetailLoading(false);
+    replaceListingQuery(null);
+  }, []);
+
+  useEffect(() => {
+    if (initialDeepLinkHandled.current) return;
+    initialDeepLinkHandled.current = true;
+    const id = new URLSearchParams(window.location.search).get("listing");
+    if (id) void openListing(id, false);
+  }, [openListing]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && selectedId) {
-        setSelectedId(null);
-        setDetail(null);
-      }
+      if (event.key === "Escape" && selectedId) closeListing();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId]);
+  }, [closeListing, selectedId]);
 
   const activeCheck = [...checks].reverse().find((check) => check.state === "active");
   const showResults = phase !== "idle" || allListings.length > 0;
@@ -621,7 +644,7 @@ export default function Marketplace() {
 
       <footer className="market-footer"><span>Super uses public NYC data. Verify all terms with Housing Connect.</span><strong>Built for NYChackathon August 15th by Ryan Lim</strong></footer>
 
-      {selectedId ? <DetailPanel listing={detail} loading={detailLoading} error={detailError} householdSize={Number(householdSize) || 1} onClose={() => { setSelectedId(null); setDetail(null); setDetailError(""); }} /> : null}
+      {selectedId ? <DetailPanel listing={detail} loading={detailLoading} error={detailError} householdSize={Number(householdSize) || 1} onClose={closeListing} /> : null}
     </main>
   );
 }

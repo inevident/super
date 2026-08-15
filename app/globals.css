@@ -418,6 +418,50 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .apply-button span { font-size: 20px; }
 .official-note { margin: 10px 20px 0; text-align: center; color: var(--quiet); font-size: 9px; line-height: 1.5; }
 
+/* Supplemental teammate inventory. The live marketplace above remains primary. */
+.listing-detail-page { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 28px 0 72px; }
+.listing-detail-page .detail-back { display: inline-block; margin-bottom: 18px; color: var(--muted); text-decoration: none; font: 11px var(--mono); }
+.listing-detail-page .detail-back:hover { color: var(--ink); }
+.listing-detail-page .detail-hero { display: grid; grid-template-columns: minmax(0, 1.18fr) minmax(300px, .82fr); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--paper); }
+.listing-detail-page .detail-gallery { height: auto; min-height: 480px; position: relative; background: var(--wash-2); }
+.listing-detail-page .gallery-stage { height: 100%; min-height: 480px; display: grid; background: var(--wash); }
+.listing-detail-page .gallery-stage.has-thumbs { grid-template-columns: minmax(0, 3fr) minmax(96px, 1fr); }
+.listing-detail-page .gallery-stage > img { width: 100%; height: 100%; object-fit: contain; background: var(--wash); }
+.listing-detail-page .gallery-thumbs { min-width: 0; padding-left: 3px; display: grid; grid-auto-rows: 1fr; gap: 3px; }
+.listing-detail-page .gallery-thumbs button { min-height: 0; padding: 0; overflow: hidden; border: 0; background: var(--paper); cursor: pointer; opacity: .62; }
+.listing-detail-page .gallery-thumbs button.active { opacity: 1; box-shadow: inset 0 0 0 3px var(--ink); }
+.listing-detail-page .gallery-thumbs img { width: 100%; height: 100%; max-height: 125px; object-fit: cover; }
+.listing-detail-page .gallery-arrow { width: 38px; height: 38px; position: absolute; top: 50%; z-index: 2; transform: translateY(-50%); border: 1px solid rgba(255,255,255,.75); border-radius: 50%; background: rgba(0,0,0,.62); color: #fff; font-size: 25px; line-height: 1; cursor: pointer; }
+.listing-detail-page .gallery-arrow.prev { left: 12px; }
+.listing-detail-page .gallery-arrow.next { right: 12px; }
+.listing-detail-page .gallery-count { position: absolute; right: 12px; bottom: 10px; padding: 5px 8px; border-radius: 999px; background: rgba(0,0,0,.68); color: #fff; font: 9px var(--mono); }
+.listing-detail-page .detail-copy { min-width: 0; padding: 34px; display: flex; flex-direction: column; align-items: flex-start; }
+.listing-detail-page .wordmark { font: 700 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--quiet); }
+.listing-detail-page .detail-copy h1 { margin: 18px 0 8px; font-size: clamp(28px, 4vw, 48px); line-height: 1.02; letter-spacing: -.04em; }
+.listing-detail-page .detail-address { margin: 0; color: var(--quiet); font: 11px/1.5 var(--mono); }
+.listing-detail-page .detail-price { margin-top: 20px; font: 22px var(--mono); }
+.listing-detail-page .detail-tags { margin: 16px 0; display: flex; flex-wrap: wrap; gap: 7px; }
+.listing-detail-page .detail-tags span { padding: 6px 9px; border: 1px solid var(--line); border-radius: 999px; font: 9px var(--mono); }
+.listing-detail-page .detail-description { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.listing-detail-page .detail-actions { width: 100%; margin-top: auto; padding-top: 22px; display: flex; flex-wrap: wrap; gap: 8px; }
+.listing-detail-page .legacy-apply, .listing-detail-page .legacy-market-link { min-height: 42px; padding: 0 14px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; font-size: 11px; font-weight: 700; }
+.listing-detail-page .legacy-apply { background: var(--ink); color: #fff; }
+.listing-detail-page .legacy-market-link { border: 1px solid var(--line-dark); }
+.listing-detail-page .legacy-unavailable { color: var(--quiet); font: 9px var(--mono); text-transform: uppercase; }
+.listing-detail-page .detail-map-section { margin-top: 24px; display: grid; grid-template-columns: 270px 1fr; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.listing-detail-page .detail-map-section > div { padding: 24px; }
+.listing-detail-page .detail-map-section h2 { margin: 0 0 8px; }
+.listing-detail-page .detail-map-section p { color: var(--quiet); font-size: 12px; }
+.listing-detail-page .detail-map-section iframe { width: 100%; min-height: 390px; border: 0; }
+.listing-detail-page .nearby-transit { margin-top: 24px; }
+.listing-detail-page .nearby-transit h3 { margin: 0 0 12px; color: var(--quiet); font: 9px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+.listing-detail-page .station { margin: 11px 0; display: flex; align-items: center; gap: 10px; }
+.listing-detail-page .station > span:last-child { display: grid; gap: 2px; }
+.listing-detail-page .station strong { font-size: 11px; }
+.listing-detail-page .station small, .listing-detail-page .transit-loading { color: var(--quiet); font: 9px var(--mono); }
+.listing-detail-page .route-dots { max-width: 72px; display: flex; flex-wrap: wrap; gap: 3px; }
+.listing-detail-page .route-dots b { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 10px; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
@@ -443,6 +487,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
   .citymap-canvas { height: 460px; min-height: 0; }
   .results-pane { grid-row: 2; }
   .market-intro { min-height: 0; }
+  .listing-detail-page .detail-hero, .listing-detail-page .detail-map-section { grid-template-columns: 1fr; }
+  .listing-detail-page .detail-gallery, .listing-detail-page .gallery-stage { min-height: 320px; }
 }
 
 @media (max-width: 620px) {
@@ -486,4 +532,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
   .building-facts { grid-template-columns: 1fr 1fr; }
   .building-facts span:nth-child(2) { border-right: 0; }
   .building-facts span:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .listing-detail-page { width: min(100% - 24px, 1180px); padding-top: 16px; }
+  .listing-detail-page .detail-copy { padding: 24px; }
+  .listing-detail-page .gallery-stage.has-thumbs { grid-template-columns: minmax(0, 4fr) 78px; }
 }

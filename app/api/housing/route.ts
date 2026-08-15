@@ -56,14 +56,20 @@ export async function POST(req: Request) {
         if (!results || results.length < 2) {
           send({ stage: "searching", message: "Matching listings…" });
           const brief_ = String(brief ?? "").toLowerCase();
-          const borough = ["manhattan", "brooklyn", "bronx", "queens", "staten"].find((b) =>
-            brief_.includes(b)
-          );
-          const rentMatch = brief_.match(/\$?\s?([0-9][0-9,]{2,5})/);
+          const boroughs = ["manhattan", "brooklyn", "bronx", "queens", "staten island"].filter((borough) => brief_.includes(borough));
+          const incomeMatch = brief_.match(/household income\s*\$?\s*([0-9][0-9,]{2,8})/);
+          const rentMatch = brief_.match(/(?:under|max(?:imum)?(?: rent)?|budget(?: of)?)\s*\$?\s*([0-9][0-9,]{2,5})/);
+          const priorityMatch = brief_.match(/priority:\s*([^;]+)/);
           const picks = searchListings({
-            borough,
+            boroughs,
+            annualIncome: incomeMatch ? Number(incomeMatch[1].replace(/,/g, "")) : undefined,
+            sortBy: priorityMatch?.[1] ?? "newest listed",
+            actionableOnly: true,
             maxRent: rentMatch ? Number(rentMatch[1].replace(/,/g, "")) : undefined,
-            limit: 6,
+            // This legacy endpoint enriches every result with NYC building data.
+            // Keep the fan-out bounded; the primary marketplace has its own
+            // progressive eight-lottery inspection pipeline.
+            limit: 12,
           });
 
           // Check the buildings even on the fallback path. "We tell you which

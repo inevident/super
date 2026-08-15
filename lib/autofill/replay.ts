@@ -1,7 +1,7 @@
 // Form Replayer
 // Handles both no-login (auto-fill) and login-required (clipboard panel) modes.
 
-import { loadProfile, type RenterProfile, type FieldMapping } from "./profile";
+import { loadProfile, saveProfile, type RenterProfile, type FieldMapping } from "./profile";
 import { detectForms, type DetectedForm } from "./detect";
 
 export type ReplayResult = {
@@ -224,7 +224,6 @@ export function showClipboardPanel(profile: RenterProfile): HTMLElement {
 function updateReplayMetadata(profile: RenterProfile, accessType: "no-login" | "login-required"): void {
   profile.metadata.lastReplayAt = new Date().toISOString();
   profile.metadata.lastReplayAccessType = accessType;
-  const { saveProfile } = require("./profile");
   saveProfile(profile);
 }
 

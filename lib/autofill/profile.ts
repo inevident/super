@@ -91,9 +91,9 @@ function getKeyMaterial(passphrase: string): Promise<CryptoKey> {
   );
 }
 
-async function deriveKey(keyMaterial: CryptoKey, salt: Uint8Array): Promise<CryptoKey> {
+async function deriveKey(keyMaterial: CryptoKey, salt: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
   return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: 100_000, hash: "SHA-256" },
+    { name: "PBKDF2", salt: salt as BufferSource, iterations: 100_000, hash: "SHA-256" },
     keyMaterial,
     { name: "AES-GCM", length: 256 },
     false,

@@ -59,7 +59,7 @@ export function buildSelector(element: Element): string {
         part += `[name="${CSS.escape(name)}"]`;
       }
     }
-    const classes = Array.from.current.classList).slice(0, 2).map((c) => CSS.escape(c)).join(".");
+    const classes = Array.from(current.classList).slice(0, 2).map((c) => CSS.escape(c)).join(".");
     if (classes) part += `.${classes}`;
 
     const parent = current.parentElement;

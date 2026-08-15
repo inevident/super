@@ -11,7 +11,7 @@ import {
   showClipboardPanel,
   generateClipboardSummary,
   type RenterProfile,
-} from "@/lib/agent";
+} from "@/lib/autofill";
 import type {
   MarketplaceEvent,
   MarketplaceListing,

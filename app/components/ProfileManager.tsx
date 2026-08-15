@@ -7,7 +7,7 @@ import {
   deleteProfile,
   profileExists,
   type RenterProfile,
-} from "@/lib/agent/profile";
+} from "@/lib/autofill/profile";
 
 type ProfileForm = {
   firstName: string;

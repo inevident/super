@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentStep } from "@/lib/types";
 
 type TraceItem = { kind: "stage"; text: string } | { kind: "step"; step: AgentStep };
@@ -44,6 +44,7 @@ export default function Housing() {
   const [mustHaves, setMustHaves] = useState<string[]>([]);
   const [gallery, setGallery] = useState<Record<string, number>>({});
   const abort = useRef<AbortController | null>(null);
+  const initialListingsLoaded = useRef(false);
 
   const ami100 = [0, 118800, 135700, 152700, 169600, 183200, 196800, 210400, 223900];
   const annualIncome = Number(income.replace(/[^0-9.]/g, "")) || 0;
@@ -103,6 +104,12 @@ export default function Housing() {
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (initialListingsLoaded.current) return;
+    initialListingsLoaded.current = true;
+    search("Show current affordable housing listings across all five boroughs");
+  }, []);
 
   return (
     <main className="shell">

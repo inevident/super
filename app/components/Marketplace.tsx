@@ -5,6 +5,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import CityMap, { type CityResultMarker } from "./CityMap";
 import Massing from "./Massing";
 import ProfileManager from "./ProfileManager";
+import AutofillPanel from "./AutofillPanel";
 import {
   loadProfile,
   profileExists,
@@ -699,6 +700,7 @@ export default function Marketplace() {
       <footer className="market-footer"><span>Super uses public NYC data. Verify all terms with Housing Connect.</span><strong>Built for NYChackathon August 15th by Ryan Lim</strong></footer>
 
       {selectedId ? <DetailPanel listing={detail} loading={detailLoading} error={detailError} householdSize={Number(householdSize) || 1} onClose={closeListing} profile={profile} /> : null}
+      <AutofillPanel />
     </main>
   );
 }

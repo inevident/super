@@ -7,7 +7,7 @@ export const maxDuration = 120;
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const id = String(params.get("id") ?? "").trim();
-  if (!/^\d+$/.test(id)) return Response.json({ error: "Invalid lottery id" }, { status: 400 });
+  if (!/^[a-zA-Z0-9-]{1,180}$/.test(id)) return Response.json({ error: "Invalid listing id" }, { status: 400 });
 
   const householdSize = Number(params.get("householdSize"));
   const annualIncome = Number(params.get("annualIncome"));

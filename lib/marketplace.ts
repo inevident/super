@@ -16,6 +16,7 @@ import {
 } from "./nyc";
 import { planRenterSearch } from "./planner";
 import { buildLandlordRedFlags, buildPrecheckRequirements, pricePrecheckKits } from "./precheck";
+import { getListing, searchListings, type Listing } from "./listings";
 import type {
   Address,
   BuildingAssessment,
@@ -290,6 +291,32 @@ function listingBase(
   };
 }
 
+function externalListingBase(listing: Listing, input: RenterBrief, plan: SearchPlan): MarketplaceListing {
+  const bedrooms = listing.beds ?? (/studio/i.test(listing.unitSize ?? "") ? 0 : Number((listing.unitSize ?? "").match(/\d+/)?.[0] ?? 0));
+  const offer: UnitOffer = {
+    id: `${listing.id}-offer`, layoutTypeId: bedrooms + 1, bedrooms,
+    label: listing.unitSize || (bedrooms === 0 ? "Studio" : `${bedrooms} Bedroom`),
+    rent: listing.rent ?? null, count: listing.units ?? 1, address: listing.address,
+    ami: listing.ami ?? null, minimumHouseholdSize: 1, maximumHouseholdSize: 20,
+    incomeBands: listing.minIncome || listing.maxIncome ? [{ householdSize: input.householdSize, minimumIncome: listing.minIncome ?? 0, maximumIncome: listing.maxIncome ?? 999999 }] : [],
+  };
+  const eligibility = evaluateEligibility([offer], listing.borough, "", input, plan);
+  const photos = unique([...(listing.imageUrls ?? []), listing.imageUrl ?? ""].filter(Boolean));
+  return {
+    id: listing.id, title: listing.name,
+    description: listing.description || `Affordable re-rental opportunity published by ${listing.source}. Contact the provider to verify current availability and terms.`,
+    borough: listing.borough, neighborhood: "", address: listing.address,
+    latitude: listing.lat ?? null, longitude: listing.lon ?? null, deadline: "", units: listing.units ?? 1,
+    photo: photos[0] ?? null, photos, amenities: [], transit: [], nearby: [],
+    buildings: [{ address: listing.address, city: listing.borough, zip: listing.zip ?? "", latitude: listing.lat ?? null, longitude: listing.lon ?? null, bbl: "", bin: "" }],
+    offers: [offer], matchedOfferIds: eligibility.matchedOfferIds,
+    eligibility: { status: eligibility.status, reasons: eligibility.reasons }, matchExplanation: "Super is checking the building record.",
+    risk: UNKNOWN_RISK, precheck: { categories: [], items: [], total: null, pricingStatus: "unavailable", oneTime: true },
+    landlordRedFlags: [], violations: [], excludedHistoricalViolations: [], profile: null,
+    applyUrl: listing.applicationUrl || listing.url || "", source: listing.source,
+  };
+}
+
 function findJoin(
   building: MarketplaceBuilding,
   rows: HousingConnectBuildingRow[]
@@ -388,7 +415,7 @@ function explanation(listing: MarketplaceListing) {
 }
 
 export async function enrichListing(listing: MarketplaceListing): Promise<MarketplaceListing> {
-  const joins = await fetchHousingConnectBuildings(listing.id);
+  const joins = /^\d+$/.test(listing.id) ? await fetchHousingConnectBuildings(listing.id) : [];
   const identities = await Promise.all(
     listing.buildings.map((building) => identifyBuilding(building, listing.borough, joins))
   );
@@ -442,17 +469,18 @@ export async function runMarketplaceSearch(input: RenterBrief, emit: Marketplace
   emit({ stage: "plan", plan });
 
   const inventory = await getHousingInventory();
+  const external = searchListings({ actionableOnly: true, limit: 100 });
   emit({
     stage: "inventory",
-    message: `Found ${inventory.rentals.length} active Housing Connect rental opportunities`,
-    count: inventory.rentals.length,
+    message: `Found ${inventory.rentals.length} Housing Connect and ${external.length} provider re-rental opportunities`,
+    count: inventory.rentals.length + external.length,
     source: inventory.source,
   });
   const candidates = [...inventory.rentals]
     .sort((a, b) => prelimScore(b, input, plan) - prelimScore(a, input, plan))
-    .slice(0, 8);
-  emit({ stage: "inspecting", message: "Reading exact unit and income bands", completed: 0, total: candidates.length });
-  const bases = await Promise.all(
+    .slice(0, 12);
+  emit({ stage: "inspecting", message: "Reading exact unit and income bands", completed: 0, total: candidates.length + external.length });
+  const housingBases = await Promise.all(
     candidates.map(async (summary) => {
       const detailResult = await getLotteryDetail(summary.lotteryId);
       return listingBase(
@@ -464,12 +492,13 @@ export async function runMarketplaceSearch(input: RenterBrief, emit: Marketplace
       );
     })
   );
+  const bases = [...housingBases, ...external.map((listing) => externalListingBase(listing, input, plan))];
   const selected = bases
     .sort((a, b) => {
       const status = { eligible: 3, near: 2, unknown: 1 };
       return status[b.eligibility.status] - status[a.eligibility.status];
     })
-    .slice(0, 6);
+    .slice(0, 18);
 
   let completed = 0;
   const enriched = await Promise.all(
@@ -497,6 +526,14 @@ export async function runMarketplaceSearch(input: RenterBrief, emit: Marketplace
 }
 
 export async function getMarketplaceListing(id: string, input?: RenterBrief) {
+  if (!/^\d+$/.test(id)) {
+    const external = getListing(id);
+    if (!external || external.source === "hpd") return null;
+    const renter = input ?? { brief: "", householdSize: 1, annualIncome: external.minIncome ?? 1 };
+    const plan = await planRenterSearch(renter);
+    const enriched = await enrichListing(externalListingBase(external, renter, plan));
+    return (await pricePrecheckKits([enriched]))[0];
+  }
   const found = await getLotterySummary(id);
   if (!found) return null;
   const renter = input ?? {

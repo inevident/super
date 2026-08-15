@@ -104,3 +104,157 @@ export type ScanEvent =
   | { stage: "picks"; picks: Pick[] }
   | { stage: "done" }
   | { stage: "error"; message: string };
+
+// Marketplace contracts. These are deliberately plain JSON objects because they
+// cross the SSE and route-handler boundary into the client.
+export type RenterBrief = {
+  brief: string;
+  householdSize: number;
+  annualIncome: number;
+};
+
+export type SearchPlan = {
+  boroughs: string[];
+  neighborhoods: string[];
+  bedrooms: { min: number; max: number } | null;
+  maxRent: number | null;
+  subwayLines: string[];
+  amenities: string[];
+  priorities: string[];
+  generatedBy: "agent" | "rules";
+};
+
+export type UnitIncomeBand = {
+  householdSize: number;
+  minimumIncome: number;
+  maximumIncome: number;
+};
+
+export type UnitOffer = {
+  id: string;
+  layoutTypeId: number;
+  bedrooms: number;
+  label: string;
+  rent: number | null;
+  count: number;
+  address: string;
+  ami: number | null;
+  minimumHouseholdSize: number;
+  maximumHouseholdSize: number;
+  incomeBands: UnitIncomeBand[];
+};
+
+export type ViolationRecord = {
+  id: string;
+  class: "A" | "B" | "C" | "Unknown";
+  inspectionDate: string;
+  status: string;
+  currentStatusDate: string;
+  floor: string;
+  apartment: string;
+  rentImpairing: boolean;
+  description: string;
+  bbl: string;
+  bin: string;
+};
+
+export type RiskSummary = {
+  level: "Low" | "Moderate" | "High" | "Unavailable";
+  openCount: number | null;
+  classCounts: { A: number; B: number; C: number };
+  recentCount: number;
+  residentialUnits: number | null;
+  explanation: string;
+};
+
+export type PrecheckCategory = "heat" | "mold" | "vermin" | "leaks" | "lead-dust";
+
+export type PrecheckRequirement = {
+  category: PrecheckCategory;
+  label: string;
+  query: string;
+  reason: string;
+  violationCount: number;
+  supplemental?: boolean;
+};
+
+export type PrecheckItem = PrecheckRequirement & { product: Product | null };
+
+export type PrecheckKit = {
+  categories: PrecheckRequirement[];
+  items: PrecheckItem[];
+  total: number | null;
+  pricingStatus: "priced" | "unavailable";
+  oneTime: true;
+};
+
+export type LandlordRedFlag = {
+  kind: string;
+  count: number;
+  summary: string;
+};
+
+export type MarketplaceBuilding = {
+  address: string;
+  city: string;
+  zip: string;
+  latitude: number | null;
+  longitude: number | null;
+  bbl: string;
+  bin: string;
+};
+
+export type Eligibility = {
+  status: "eligible" | "near" | "unknown";
+  reasons: string[];
+};
+
+export type MarketplaceListing = {
+  id: string;
+  title: string;
+  description: string;
+  borough: string;
+  neighborhood: string;
+  address: string;
+  latitude: number | null;
+  longitude: number | null;
+  deadline: string;
+  units: number;
+  photo: string | null;
+  photos: string[];
+  amenities: string[];
+  transit: string[];
+  nearby: { name: string; type: string; train: string }[];
+  buildings: MarketplaceBuilding[];
+  offers: UnitOffer[];
+  matchedOfferIds: string[];
+  eligibility: Eligibility;
+  matchExplanation: string;
+  risk: RiskSummary;
+  precheck: PrecheckKit;
+  landlordRedFlags: LandlordRedFlag[];
+  violations: ViolationRecord[];
+  excludedHistoricalViolations: ViolationRecord[];
+  profile: BuildingProfile | null;
+  applyUrl: string;
+  source: "live" | "snapshot";
+};
+
+export type BuildingAssessment = {
+  profile: BuildingProfile | null;
+  violations: ViolationRecord[];
+  excludedHistoricalViolations: ViolationRecord[];
+  risk: RiskSummary;
+  recordAvailable: boolean;
+};
+
+export type MarketplaceEvent =
+  | { stage: "planning"; message: string }
+  | { stage: "plan"; plan: SearchPlan }
+  | { stage: "inventory"; message: string; count: number; source: "live" | "snapshot" }
+  | { stage: "inspecting"; message: string; completed: number; total: number }
+  | { stage: "listing"; listing: MarketplaceListing }
+  | { stage: "pricing"; message: string }
+  | { stage: "results"; exact: MarketplaceListing[]; near: MarketplaceListing[] }
+  | { stage: "done" }
+  | { stage: "error"; message: string };

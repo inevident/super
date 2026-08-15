@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const SODA = "https://data.cityofnewyork.us/resource";
-const OPEN = "currentstatus NOT LIKE '%CLOSED%' AND currentstatus NOT LIKE '%DISMISSED%'";
+const OPEN = "violationstatus='Open'";
 
 let cache: { at: number; body: string } | null = null;
 const TTL = 10 * 60 * 1000;

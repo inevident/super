@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Super — know your building before you move in",
+  title: "Super — NYC rentals, prechecked",
   description:
-    "Type your new NYC address. Super reads the building's real violation record and carts what you'll actually need.",
+    "An agentic NYC affordable-housing marketplace that verifies eligibility and checks each building's open HPD record before you apply.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

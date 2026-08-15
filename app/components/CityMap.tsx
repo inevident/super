@@ -9,6 +9,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+export type CityResultMarker = {
+  id: string;
+  latitude: number;
+  longitude: number;
+  label: string;
+  risk: "Low" | "Moderate" | "High" | "Unavailable";
+};
+
 type Streets = { segments: number; points: number; xs: number[]; ys: number[]; lens: number[] };
 
 type City = {
@@ -24,17 +32,31 @@ type City = {
 const PITCH_MIN = 0.18;
 const PITCH_MAX = 0.95;
 
-export default function CityMap() {
+type Props = {
+  markers?: CityResultMarker[];
+  selectedId?: string | null;
+  onSelect?: (id: string) => void;
+};
+
+export default function CityMap({ markers = [], selectedId = null, onSelect }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [city, setCity] = useState<City | null>(null);
   const [streets, setStreets] = useState<Streets | null>(null);
   const [err, setErr] = useState("");
-  const [hover, setHover] = useState<string>("");
+  const hitTargets = useRef<Array<{ id: string; x: number; y: number }>>([]);
 
   // Kept in a ref so dragging never triggers a React re-render.
   // Radius-fit guarantees no clipping at any rotation, but NYC is elongated so the
   // circle leaves wide margins. Default zoom compensates; the user can pull back.
-  const view = useRef({ yaw: -0.6, pitch: 0.5, zoom: 1.45, dragging: false, lx: 0, ly: 0 });
+  const view = useRef({
+    yaw: -0.6,
+    pitch: 0.5,
+    zoom: 1.45,
+    dragging: false,
+    moved: false,
+    lx: 0,
+    ly: 0,
+  });
 
   useEffect(() => {
     // Static snapshot first: the live aggregation is a full-table scan on NYC's
@@ -255,6 +277,46 @@ export default function CityMap() {
         ctx.fillRect(x - w / 2, y - h, w, Math.max(0.7, w * 0.36));
       }
 
+      // Search results sit above the citywide violation columns. Their screen
+      // positions use the same projection, so they stay pinned while orbiting.
+      hitTargets.current = [];
+      for (const marker of markers) {
+        const worldX = (marker.longitude - lon0) * 111320 * cosLat - cx;
+        const worldY = -(marker.latitude - lat0) * 110540 - cy;
+        const [x, y] = gp(worldX, worldY);
+        if (x < -30 || x > W + 30 || y < -30 || y > H + 30) continue;
+        const selected = marker.id === selectedId;
+        const color =
+          marker.risk === "High"
+            ? "#c0392b"
+            : marker.risk === "Moderate"
+              ? "#b86f16"
+              : marker.risk === "Low"
+                ? "#16725d"
+                : "#5e6470";
+        ctx.save();
+        ctx.shadowColor = "rgba(0,0,0,.18)";
+        ctx.shadowBlur = selected ? 14 : 8;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(x, y - 9, selected ? 9 : 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(x, y - 9, selected ? 3.2 : 2.4, 0, Math.PI * 2);
+        ctx.fill();
+        if (selected) {
+          ctx.strokeStyle = "#0a0a0a";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(x, y - 9, 13, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.restore();
+        hitTargets.current.push({ id: marker.id, x, y: y - 9 });
+      }
+
       raf = 0;
     };
 
@@ -266,6 +328,7 @@ export default function CityMap() {
 
     const onDown = (e: PointerEvent) => {
       view.current.dragging = true;
+      view.current.moved = false;
       view.current.lx = e.clientX;
       view.current.ly = e.clientY;
       canvas.setPointerCapture(e.pointerId);
@@ -273,6 +336,7 @@ export default function CityMap() {
     const onMove = (e: PointerEvent) => {
       const v = view.current;
       if (!v.dragging) return;
+      if (Math.abs(e.clientX - v.lx) + Math.abs(e.clientY - v.ly) > 3) v.moved = true;
       v.yaw += (e.clientX - v.lx) * 0.006;
       v.pitch = Math.max(PITCH_MIN, Math.min(PITCH_MAX, v.pitch + (e.clientY - v.ly) * 0.004));
       v.lx = e.clientX;
@@ -280,8 +344,16 @@ export default function CityMap() {
       schedule();
     };
     const onUp = (e: PointerEvent) => {
+      const moved = view.current.moved;
       view.current.dragging = false;
       canvas.releasePointerCapture?.(e.pointerId);
+      if (!moved && onSelect) {
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const hit = hitTargets.current.find((target) => Math.hypot(target.x - x, target.y - y) <= 18);
+        if (hit) onSelect(hit.id);
+      }
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -305,7 +377,7 @@ export default function CityMap() {
       ro.disconnect();
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [city, layer]);
+  }, [city, layer, markers, onSelect, selectedId]);
 
   return (
     <section className="citymap">
@@ -317,7 +389,9 @@ export default function CityMap() {
               ? "City map unavailable"
               : "Loading citywide record…"}
         </span>
-        <span className="citymap-hint">drag to orbit · scroll to zoom</span>
+        <span className="citymap-hint">
+          {markers.length ? `${markers.length} matches · click a marker` : "drag to orbit · scroll to zoom"}
+        </span>
       </div>
       <canvas ref={canvasRef} className="citymap-canvas" />
       {err && <div className="error">{err}</div>}

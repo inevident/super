@@ -51,11 +51,27 @@ export const TOOLS = [
   },
 ];
 
+export type ToolDefinition = {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+};
+
 export type ModelClient = (
   messages: any[],
   system: string,
   opts?: { forceTool?: string }
 ) => Promise<{ stop_reason: string; content: any[] }>;
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function systemPrompt() {
   return [
@@ -74,22 +90,21 @@ function systemPrompt() {
     "   that genuinely does the job. Keep the cart under $200 total. A $160 air",
     "   purifier or a $100 smoke alarm is a wrong answer when a $30 one is in the",
     "   results.",
-    "5. The item must actually MITIGATE the violation, not work around it. For a",
-    "   hot water violation buy a point-of-use electric water heater (faucet or",
-    "   shower mount) \u2014 never a kettle, which only works around the problem.",
-    "   If a violation has no product that genuinely helps, skip it and buy nothing.",
+    "5. The item must actually MITIGATE the violation, not work around it. Hot",
+    "   water, gas, electrical, structural, fire-egress, window-guard, and alarm",
+    "   violations require landlord action. Never shop for those categories.",
+    "   If a violation has no safe renter-scale mitigation, buy nothing.",
     "",
-    "Typical mappings: heat -> space heater. hot water -> instant electric water",
-    "heater, faucet or shower mount. vermin -> traps. mold -> dehumidifier.",
-    "leak -> water leak detector. lead paint -> true HEPA purifier. smoke or CO",
-    "alarm -> replacement alarm. noise complaints -> white noise machine.",
+    "Allowed mappings: heat -> portable space heater. vermin -> enclosed traps.",
+    "mold -> dehumidifier. leak -> water leak detector. lead dust -> true HEPA",
+    "purifier, labeled supplemental. Do not invent any other mapping.",
     "",
     "Size to the PHYSICAL building, which is why the facts are given to you:",
     "- Walk-up means nothing heavy. Never a window AC for an upper-floor walk-up.",
     "- Pre-1978 means lead dust is real; require true HEPA, not generic filtration.",
     "- A ~700 sq ft unit needs a room appliance, not a whole-house unit.",
-    "- A renter cannot rewire the building. Water heaters must plug into a normal",
-    "  outlet: never a hard-wired 240V tankless or whole-house unit. Under $150.",
+    "- A renter cannot rewire or alter building systems. Never buy water heaters,",
+    "  alarms, window guards, gas devices, or hard-wired products. Under $150.",
     "",
     "Process: call search_products once per need. If results are the wrong size or",
     "category for this apartment, search again with a better query. Then call",
@@ -308,9 +323,13 @@ export const FREE_MODELS = [
   "google/gemma-4-26b-a4b-it:free",
 ];
 
-export function openrouterClient(apiKey: string, models: string[]): ModelClient {
+export function openrouterClient(
+  apiKey: string,
+  models: string[],
+  tools: readonly ToolDefinition[] = TOOLS
+): ModelClient {
   const toOpenAITools = () =>
-    TOOLS.map((t) => ({
+    tools.map((t) => ({
       type: "function" as const,
       function: { name: t.name, description: t.description, parameters: t.input_schema },
     }));
@@ -354,7 +373,7 @@ export function openrouterClient(apiKey: string, models: string[]): ModelClient 
   return async (messages, system, opts) => {
     const body: any = {
       messages: toOpenAIMessages(messages, system),
-      tools: toOpenAITools(),
+      ...(tools.length ? { tools: toOpenAITools() } : {}),
       // These models reason at length before emitting the call. At 1200 the
       // response was truncating mid-tool-call, producing malformed arguments
       // that got dropped, so the agent looked like it was refusing to commit.
@@ -371,18 +390,31 @@ export function openrouterClient(apiKey: string, models: string[]): ModelClient 
     const order = pinned ? [pinned, ...models.filter((m) => m !== pinned)] : models;
     const failures: string[] = [];
     let d: any = null;
+    const deadline = Date.now() + 30_000;
 
     for (const candidate of order) {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${apiKey}`,
-          "HTTP-Referer": "https://super.local",
-          "X-Title": "Super",
-        },
-        body: JSON.stringify({ model: candidate, ...body }),
-      });
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      let res: Response;
+      try {
+        res = await fetchWithTimeout(
+          "https://openrouter.ai/api/v1/chat/completions",
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${apiKey}`,
+              "HTTP-Referer": "https://super.local",
+              "X-Title": "Super",
+            },
+            body: JSON.stringify({ model: candidate, ...body }),
+          },
+          Math.min(12_000, remaining)
+        );
+      } catch {
+        failures.push(`${candidate} (timeout/network)`);
+        continue;
+      }
 
       const parsed = res.ok ? await res.json().catch(() => null) : null;
 
@@ -435,24 +467,31 @@ export function openrouterClient(apiKey: string, models: string[]): ModelClient 
 
 // Live Anthropic client. Tool use is the whole point here, so this talks to the
 // Messages API directly rather than through a wrapper.
-export function anthropicClient(apiKey: string): ModelClient {
+export function anthropicClient(
+  apiKey: string,
+  tools: readonly ToolDefinition[] = TOOLS
+): ModelClient {
   return async (messages, system, opts) => {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
+    const res = await fetchWithTimeout(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: process.env.SUPER_MODEL ?? "claude-sonnet-5",
+          max_tokens: 2048,
+          system,
+          ...(tools.length ? { tools } : {}),
+          ...(opts?.forceTool ? { tool_choice: { type: "tool", name: opts.forceTool } } : {}),
+          messages,
+        }),
       },
-      body: JSON.stringify({
-        model: process.env.SUPER_MODEL ?? "claude-sonnet-5",
-        max_tokens: 2048,
-        system,
-        tools: TOOLS,
-        ...(opts?.forceTool ? { tool_choice: { type: "tool", name: opts.forceTool } } : {}),
-        messages,
-      }),
-    });
+      25_000
+    );
     if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
     const d = await res.json();
     return { stop_reason: d.stop_reason, content: d.content };
@@ -462,15 +501,15 @@ export function anthropicClient(apiKey: string): ModelClient {
 // Pick whichever provider is configured. OpenRouter wins when both are present,
 // since that is the free path. Returns null when neither is set, which drops the
 // pipeline to the deterministic fallback.
-export function selectModel(): ModelClient | null {
+export function selectModel(tools: readonly ToolDefinition[] = TOOLS): ModelClient | null {
   const or = process.env.OPENROUTER_API_KEY;
   if (or) {
     // SUPER_MODEL pins one model; otherwise walk the free list until one answers.
     const preferred = process.env.SUPER_MODEL;
-    return openrouterClient(or, preferred ? [preferred] : FREE_MODELS);
+    return openrouterClient(or, preferred ? [preferred] : FREE_MODELS, tools);
   }
   const anthropic = process.env.ANTHROPIC_API_KEY;
-  if (anthropic) return anthropicClient(anthropic);
+  if (anthropic) return anthropicClient(anthropic, tools);
   return null;
 }
 

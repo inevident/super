@@ -4,6 +4,14 @@ import Image from "next/image";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CityMap, { type CityResultMarker } from "./CityMap";
 import Massing from "./Massing";
+import ProfileManager from "./ProfileManager";
+import {
+  loadProfile,
+  profileExists,
+  showClipboardPanel,
+  generateClipboardSummary,
+  type RenterProfile,
+} from "@/lib/agent";
 import type {
   MarketplaceEvent,
   MarketplaceListing,
@@ -212,12 +220,14 @@ function DetailPanel({
   error,
   householdSize,
   onClose,
+  profile,
 }: {
   listing: MarketplaceListing | null;
   loading: boolean;
   error: string;
   householdSize: number;
   onClose: () => void;
+  profile: RenterProfile | null;
 }) {
   const [photoIndex, setPhotoIndex] = useState(0);
   useEffect(() => setPhotoIndex(0), [listing?.id]);
@@ -377,8 +387,26 @@ function DetailPanel({
                 </div>
               </section>
 
-              <a className="apply-button" href={listing.applyUrl} target="_blank" rel="noreferrer">Apply on Housing Connect <span>↗</span></a>
-              <p className="official-note">Super checks public records and eligibility bands. Applications and final determinations stay with NYC Housing Connect.</p>
+              {profile ? (
+                <>
+                  <button
+                    type="button"
+                    className="apply-button autofill-ready"
+                    onClick={() => showClipboardPanel(profile)}
+                  >
+                    Copy application info <span>📋</span>
+                  </button>
+                  <a className="apply-button secondary" href={listing.applyUrl} target="_blank" rel="noreferrer">
+                    Open Housing Connect <span>↗</span>
+                  </a>
+                  <p className="official-note">Super will show your info to paste. Applications stay with NYC Housing Connect.</p>
+                </>
+              ) : (
+                <>
+                  <a className="apply-button" href={listing.applyUrl} target="_blank" rel="noreferrer">Apply on Housing Connect <span>↗</span></a>
+                  <p className="official-note">Super checks public records and eligibility bands. Applications and final determinations stay with NYC Housing Connect.</p>
+                </>
+              )}
             </div>
           </>
         ) : null}
@@ -402,6 +430,8 @@ export default function Marketplace() {
   const [detail, setDetail] = useState<MarketplaceListing | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
+  const [profile, setProfile] = useState<RenterProfile | null>(null);
+  const [autofillEnabled, setAutofillEnabled] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const initialDeepLinkHandled = useRef(false);
 
@@ -557,6 +587,24 @@ export default function Marketplace() {
     if (id) void openListing(id, false);
   }, [openListing]);
 
+  // Load autofill profile on mount
+  useEffect(() => {
+    const existing = loadProfile();
+    if (existing) {
+      setProfile(existing);
+      setAutofillEnabled(true);
+      // Auto-fill brief from profile
+      const householdField = existing.forms
+        .flatMap((f) => f.fields)
+        .find((field) => field.label.toLowerCase().includes("household"));
+      const incomeField = existing.forms
+        .flatMap((f) => f.fields)
+        .find((field) => field.label.toLowerCase().includes("income"));
+      if (householdField) setHouseholdSize(householdField.value);
+      if (incomeField) setAnnualIncome(incomeField.value);
+    }
+  }, []);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape" && selectedId) closeListing();
@@ -584,6 +632,12 @@ export default function Marketplace() {
         </div>
         <div className="hero-proof"><strong>3 checks Zillow skips</strong><span>Exact eligibility</span><span>Open HPD violations</span><span>One-time Precheck cost</span></div>
       </section>
+
+      <ProfileManager
+        onProfileLoaded={(p) => { setProfile(p); setAutofillEnabled(true); }}
+        onProfileDeleted={() => { setProfile(null); setAutofillEnabled(false); setHouseholdSize("2"); setAnnualIncome("75000"); }}
+        briefAutoFill={(h, i) => { setHouseholdSize(h); setAnnualIncome(i); }}
+      />
 
       <form className="market-search" onSubmit={search}>
         <label className="brief-field">
@@ -644,7 +698,7 @@ export default function Marketplace() {
 
       <footer className="market-footer"><span>Super uses public NYC data. Verify all terms with Housing Connect.</span><strong>Built for NYChackathon August 15th by Ryan Lim</strong></footer>
 
-      {selectedId ? <DetailPanel listing={detail} loading={detailLoading} error={detailError} householdSize={Number(householdSize) || 1} onClose={closeListing} /> : null}
+      {selectedId ? <DetailPanel listing={detail} loading={detailLoading} error={detailError} householdSize={Number(householdSize) || 1} onClose={closeListing} profile={profile} /> : null}
     </main>
   );
 }

@@ -118,6 +118,36 @@ Private. Flip it public at submission time:
 gh repo edit --visibility public --accept-visibility-change-consequences
 ```
 
+## Autofill Info
+
+Super lets you save your personal information locally so you never have to re-type it on Housing Connect applications.
+
+### How it works
+
+1. **Set up your profile** — Enter your name, phone, email, address, household size, and income once. All data is stored in your browser's localStorage — nothing is sent to any server.
+2. **Auto-fill your search** — Super pre-fills household size and income from your profile when you start a new search.
+3. **Apply with one click** — When you find a lottery and click "Copy application info," Super shows a clipboard panel with your mapped field values. Copy and paste into Housing Connect's form.
+
+### Two modes
+
+- **No-login forms** (waitlists, landlord screenings): Super auto-fills fields directly via the [Tampermonkey userscript](public/super-autofill.user.js).
+- **Login-required forms** (Housing Connect): Super shows a clipboard panel — you paste manually. We never bypass login walls.
+
+### Privacy
+
+- All data stored locally in your browser
+- No backend, no accounts, no tracking
+- Delete your profile at any time with one click
+
+### Files
+
+- `lib/autofill/profile.ts` — localStorage CRUD with AES-GCM encryption
+- `lib/autofill/detect.ts` — generic form field detection
+- `lib/autofill/recorder.ts` — captures user inputs field-by-field
+- `lib/autofill/replay.ts` — no-login auto-fill + clipboard panel
+- `app/components/ProfileManager.tsx` — profile setup/edit UI
+- `public/super-autofill.user.js` — Tampermonkey userscript for external pages
+
 ## What's here
 
 - `app/` — single-screen UI, the streaming scan route, address autocomplete

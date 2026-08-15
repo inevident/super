@@ -181,6 +181,9 @@ export default function ProfileManager({
         <div className="profile-setup-header">
           <h3>Set up autofill</h3>
           <p>Enter your info once. Super remembers it for every application.</p>
+          <p className="profile-tooltip">
+            <strong>How it works:</strong> Your information is saved only on this device. When you apply to a housing lottery, Super will show a clipboard panel with your details ready to paste into Housing Connect's form. Nothing is sent to any server.
+          </p>
         </div>
         <ProfileFormFields form={form} setForm={setForm} />
         <div className="profile-setup-actions">

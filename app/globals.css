@@ -812,3 +812,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
     padding: 16px;
   }
 }
+
+/* Profile tooltip */
+.profile-tooltip {
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #0369a1;
+  margin: 8px 0 0 !important;
+}
+
+.profile-tooltip strong {
+  color: #0284c7;
+}

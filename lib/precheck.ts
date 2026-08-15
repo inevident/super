@@ -59,11 +59,29 @@ const PRODUCT_TITLE_MATCH: Record<PrecheckCategory, RegExp> = {
   storage: /\b(?:under[\s-]?bed storage|storage (?:bin|bag|container))\b/i,
 };
 
+// Shopify's catalog search is already scoped to the requirement query, but
+// merchant titles are inconsistent (for example, many real HEPA purifiers do
+// not include the word "true"). Prefer the exact rules above, then allow a
+// category-relevant, renter-safe result at the hackathon's 70% match floor.
+const APPROXIMATE_PRODUCT_TITLE_MATCH: Record<PrecheckCategory, RegExp> = {
+  heat: /\b(?:heater|radiator)\b/i,
+  mold: /\b(?:dehumidifier|moisture absorber)\b/i,
+  vermin: /\b(?:trap|traps|interceptor|catcher|pest station)\b/i,
+  leaks: /\b(?:(?:water|leak|moisture).*(?:detector|sensor|alarm)|(?:detector|sensor|alarm).*(?:water|leak|moisture))\b/i,
+  "lead-dust": /\b(?:air purifier|air cleaner|hepa purifier)\b/i,
+  privacy: /\b(?:curtain|shade|blind|window film)\b/i,
+  drafts: /\b(?:insulation|draft|weatherstrip|weather strip)\b/i,
+  noise: /\b(?:white noise|sound machine|sleep sound)\b/i,
+  storage: /\b(?:storage|organizer)\b/i,
+};
+
+export const APPROXIMATE_PRECHECK_MATCH = 0.7;
+
 const PRODUCT_TITLE_REJECT: Partial<Record<PrecheckCategory, RegExp>> = {
-  vermin: /\b(?:glue|sticky|adhesive)\b/i,
+  vermin: /\b(?:glue|sticky|adhesive|poison|pesticide|insecticide|rodenticide)\b/i,
   heat: /\b(?:propane|natural gas|kerosene|butane|fuel(?:ed)?)\b/i,
-  "lead-dust": /\b(?:replacement|filter only|filter pack)\b/i,
-  privacy: /\b(?:corded|bracket|screws?|required hardware|mounting hardware|permanent mount)\b/i,
+  "lead-dust": /\b(?:replacement|filter only|filter pack|filter cartridge)\b/i,
+  privacy: /\b(?:corded|bracket|screws?|required hardware|mounting hardware|permanent|drill[\s-]?mount)\b/i,
 };
 
 const TEMPORARY_PRIVACY = /\b(?:no[\s-]?drill|temporary|static[\s-]?cling|peel[\s-]?(?:and|&)[\s-]?stick|self[\s-]?adhesive)\b/i;
@@ -83,6 +101,53 @@ export function productMatchesPrecheck(
     if (/\bbed[\s-]?bug\b/.test(target) && !/\bbed[\s-]?bug\b/i.test(title)) return false;
   }
   return true;
+}
+
+function verminProductConflictsWithQuery(title: string, query: string) {
+  const target = query.toLowerCase();
+  const asksForRodent = /\b(?:mouse|mice|rat|rodent)\b/.test(target);
+  const asksForRoach = /\b(?:roach|cockroach)\b/.test(target);
+  const asksForBedbug = /\bbed[\s-]?bug\b/.test(target);
+  const mentionsRodent = /\b(?:mouse|mice|rat|rodent)\b/i.test(title);
+  const mentionsRoach = /\b(?:roach|cockroach)\b/i.test(title);
+  const mentionsBedbug = /\bbed[\s-]?bug\b/i.test(title);
+  const mentionsSpecificPest = mentionsRodent || mentionsRoach || mentionsBedbug;
+  if (!mentionsSpecificPest) return false;
+  if (asksForRodent) return !mentionsRodent;
+  if (asksForRoach) return !mentionsRoach;
+  if (asksForBedbug) return !mentionsBedbug;
+  return false;
+}
+
+export function precheckProductMatchScore(
+  category: PrecheckCategory,
+  title: string,
+  query = ""
+) {
+  if (productMatchesPrecheck(category, title, query)) return 1;
+  if (PRODUCT_TITLE_REJECT[category]?.test(title)) return 0;
+  if (category === "vermin" && verminProductConflictsWithQuery(title, query)) return 0;
+  return APPROXIMATE_PRODUCT_TITLE_MATCH[category].test(title)
+    ? APPROXIMATE_PRECHECK_MATCH
+    : 0;
+}
+
+export function pickPrecheckProduct(
+  category: PrecheckCategory,
+  products: Parameters<typeof pickBest>[0],
+  query = ""
+) {
+  const scored = products
+    .map((product) => ({ product, score: precheckProductMatchScore(category, product.title, query) }))
+    .filter((candidate) => candidate.score >= APPROXIMATE_PRECHECK_MATCH);
+  const scores = [...new Set(scored.map((candidate) => candidate.score))].sort((a, b) => b - a);
+  for (const score of scores) {
+    const product = pickBest(
+      scored.filter((candidate) => candidate.score === score).map((candidate) => candidate.product)
+    );
+    if (product) return product;
+  }
+  return null;
 }
 
 const LANDLORD: Array<{ kind: string; pattern: RegExp; summary: string }> = [
@@ -228,9 +293,7 @@ export async function pricePrecheckKits(
           : await catalogSearch(requirement.query, zip);
         return {
           key,
-          product: pickBest(products.filter((product) =>
-            productMatchesPrecheck(requirement.category, product.title, requirement.query)
-          )),
+          product: pickPrecheckProduct(requirement.category, products, requirement.query),
         };
       } catch (error) {
         if (signal?.aborted) throw error;
@@ -242,10 +305,14 @@ export async function pricePrecheckKits(
 
   return listings.map((listing) => {
     const categories = listing.precheck.categories;
+    const hasKnownViolationBasis = categories.some((category) => category.basis === "violation");
+    const recordUnavailable = listing.risk.level === "Unavailable" && !hasKnownViolationBasis;
     if (!categories.length) {
       return {
         ...listing,
-        precheck: { categories: [], items: [], total: 0, pricingStatus: "priced" as const, oneTime: true as const },
+        precheck: recordUnavailable
+          ? { categories: [], items: [], total: null, pricingStatus: "unavailable" as const, oneTime: true as const }
+          : { categories: [], items: [], total: 0, pricingStatus: "priced" as const, oneTime: true as const },
       };
     }
     const zip = listingZip(listing);
@@ -260,10 +327,10 @@ export async function pricePrecheckKits(
       precheck: {
         categories,
         items,
-        total: complete
+        total: complete && !recordUnavailable
           ? Math.round(requiredItems.reduce((sum, item) => sum + (item.product?.price ?? 0), 0) * 100) / 100
           : null,
-        pricingStatus: complete ? ("priced" as const) : ("unavailable" as const),
+        pricingStatus: complete && !recordUnavailable ? ("priced" as const) : ("unavailable" as const),
         oneTime: true as const,
       },
     };

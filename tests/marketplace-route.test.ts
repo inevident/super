@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { POST } from "../app/api/marketplace/search/route";
-import { marketplaceListingResponse } from "../lib/marketplace-listing-response";
+import {
+  marketplaceListingPostResponse,
+  marketplaceListingResponse,
+} from "../lib/marketplace-listing-response";
 import { marketplaceSearchResponse } from "../lib/marketplace-search-response";
 
 describe("POST /api/marketplace/search", () => {
@@ -88,6 +91,20 @@ describe("GET /api/marketplace/listing", () => {
     }, expect.any(AbortSignal));
   });
 
+  it("accepts a provider slug without weakening path validation", async () => {
+    const getter = vi.fn(async () => ({ id: "reside-661-manida-6b" }) as any);
+    const response = await marketplaceListingResponse(
+      new Request("http://localhost/api/marketplace/listing?id=reside-661-manida-6b"),
+      getter
+    );
+    expect(response.status).toBe(200);
+    expect(getter).toHaveBeenCalledWith(
+      "reside-661-manida-6b",
+      undefined,
+      expect.any(AbortSignal)
+    );
+  });
+
   it("rejects partial or out-of-range renter context instead of silently dropping it", async () => {
     const getter = vi.fn();
     const partial = await marketplaceListingResponse(
@@ -129,5 +146,41 @@ describe("GET /api/marketplace/listing", () => {
     );
     expect(response.status).toBe(502);
     expect(await response.json()).toEqual({ error: "Listing temporarily unavailable" });
+  });
+});
+
+describe("POST /api/marketplace/listing", () => {
+  it("keeps normalized renter context in the request body instead of the URL", async () => {
+    const getter = vi.fn(async () => ({ id: "reside-661-manida-6b" }) as any);
+    const request = new Request("http://localhost/api/marketplace/listing", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "reside-661-manida-6b",
+        input: { brief: "one bedroom", householdSize: 2, annualIncome: 82_000 },
+      }),
+    });
+    const response = await marketplaceListingPostResponse(request, getter);
+
+    expect(response.status).toBe(200);
+    expect(request.url).toBe("http://localhost/api/marketplace/listing");
+    expect(getter).toHaveBeenCalledWith(
+      "reside-661-manida-6b",
+      { brief: "one bedroom", householdSize: 2, annualIncome: 82_000 },
+      expect.any(AbortSignal)
+    );
+  });
+
+  it("rejects malformed body context before provider work runs", async () => {
+    const getter = vi.fn();
+    const response = await marketplaceListingPostResponse(
+      new Request("http://localhost/api/marketplace/listing", {
+        method: "POST",
+        body: JSON.stringify({ id: "reside-safe", input: { householdSize: 0 } }),
+      }),
+      getter
+    );
+    expect(response.status).toBe(400);
+    expect(getter).not.toHaveBeenCalled();
   });
 });

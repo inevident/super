@@ -5,6 +5,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import CityMap, { type CityResultMarker } from "./CityMap";
 import Massing from "./Massing";
 import { isDisplayImageSource } from "@/lib/image-policy";
+import { normalizeSubwayLines, subwayLineStyle } from "@/lib/subway";
 import type {
   MarketplaceEvent,
   MarketplaceListing,
@@ -51,11 +52,10 @@ function matchedOffers(listing: MarketplaceListing) {
 }
 
 function rentLabel(listing: MarketplaceListing) {
-  const rents = unique(
-    matchedOffers(listing)
-      .map((offer) => offer.rent)
-      .filter((rent): rent is number => rent != null)
-  ).sort((a, b) => a - b);
+  const offers = matchedOffers(listing);
+  const rents = unique(offers.flatMap((offer) =>
+    [offer.rent, offer.rentMaximum].filter((rent): rent is number => rent != null)
+  )).sort((a, b) => a - b);
   if (!rents.length) return "Rent needs verification";
   return rents.length === 1
     ? `${formatMoney(rents[0])}/mo`
@@ -66,11 +66,41 @@ function unique<T>(items: T[]) {
   return [...new Set(items)];
 }
 
-function replaceListingQuery(id: string | null) {
+function updateListingQuery(id: string | null, mode: "push" | "replace" = "replace") {
   const url = new URL(window.location.href);
   if (id) url.searchParams.set("listing", id);
   else url.searchParams.delete("listing");
-  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  const currentState = window.history.state && typeof window.history.state === "object"
+    ? window.history.state
+    : {};
+  window.history[mode === "push" ? "pushState" : "replaceState"](
+    { ...currentState, superListingEntry: Boolean(id) },
+    "",
+    `${url.pathname}${url.search}${url.hash}`
+  );
+}
+
+function listingDeadline(listing: MarketplaceListing) {
+  if (listing.deadline) return `Apply by ${formatDate(listing.deadline)}`;
+  return listing.provider === "housing-connect" ? "Deadline unavailable" : "Provider availability";
+}
+
+function providerActionLabel(listing: MarketplaceListing) {
+  if (listing.provider === "housing-connect") return "Apply on Housing Connect";
+  if (listing.provider === "nychdc") return "Open NYC HDC application";
+  return `Open ${listing.providerLabel} listing`;
+}
+
+function SubwayLines({ lines }: { lines: string[] }) {
+  const routes = normalizeSubwayLines(lines);
+  return (
+    <div className="subway-lines" aria-label={routes.length ? `Subway lines ${routes.join(", ")}` : "Subway lines unavailable"}>
+      <span>Subway</span>
+      {routes.length
+        ? routes.map((line) => <i key={line} style={subwayLineStyle(line)}>{line}</i>)
+        : <em>lookup unavailable</em>}
+    </div>
+  );
 }
 
 function Thinking({ label }: { label: string }) {
@@ -132,17 +162,22 @@ function ListingCard({
                 ? "Near match"
                 : "Verify eligibility"}
           </span>
+          <span className="provider-pill">{listing.providerLabel}</span>
         </div>
         <div className="market-card-body">
           <div className="card-price-row">
             <strong>{rentLabel(listing)}</strong>
-            <span>Apply by {formatDate(listing.deadline)}</span>
+            <span>{listingDeadline(listing)}</span>
           </div>
           <h3>{listing.title}</h3>
           <p className="card-location">
             {[listing.neighborhood, listing.borough].filter(Boolean).join(", ")} · {listing.address}
           </p>
-          <p className="card-units">{availableUnits || listing.units} available · {bedrooms || "Unit mix available"}</p>
+          <p className="card-units">
+            {availableUnits || listing.units ? `${availableUnits || listing.units} available` : "Availability varies"}
+            {` · ${bedrooms || "Unit mix available"}`}
+          </p>
+          <SubwayLines lines={listing.transit} />
           {listing.eligibility.reasons.length ? (
             <p className="near-reason">{listing.eligibility.reasons.join(" · ")}</p>
           ) : (
@@ -152,10 +187,10 @@ function ListingCard({
             <RiskBadge listing={listing} />
             <span className="precheck-badge">
               {listing.precheck.total != null
-                ? `Violation Precheck: ${formatMoney(listing.precheck.total)} one time`
+                ? `Precheck kit: ${formatMoney(listing.precheck.total)} one time`
                 : listing.precheck.categories.length
-                  ? "Violation Precheck: live pricing unavailable"
-                  : "Precheck pending"}
+                  ? "Precheck kit: live pricing unavailable"
+                  : "Precheck kit: building record unavailable"}
             </span>
           </div>
         </div>
@@ -197,14 +232,22 @@ function RecordedShowcaseCard({
 
 function OfferRow({ offer, matched, householdSize }: { offer: UnitOffer; matched: boolean; householdSize: number }) {
   const band = offer.incomeBands.find((item) => item.householdSize === householdSize);
+  const household = offer.minimumHouseholdSize > 0 || offer.maximumHouseholdSize > 0
+    ? `household ${offer.minimumHouseholdSize}–${offer.maximumHouseholdSize}`
+    : "household rule not published";
+  const rent = offer.rent == null
+    ? "Verify rent"
+    : offer.rentMaximum != null && offer.rentMaximum !== offer.rent
+      ? `${formatMoney(offer.rent)}–${formatMoney(offer.rentMaximum)}/mo`
+      : `${formatMoney(offer.rent)}/mo`;
   return (
     <div className={`offer-row${matched ? " matched" : ""}`}>
       <div>
-        <strong>{offer.count} {offer.label}{offer.count === 1 ? "" : "s"}</strong>
-        <span>{offer.ami ? `${offer.ami}% AMI` : "AMI not listed"} · household {offer.minimumHouseholdSize}–{offer.maximumHouseholdSize}</span>
+        <strong>{offer.count > 0 ? `${offer.count} ` : ""}{offer.label}{offer.count > 1 ? "s" : ""}</strong>
+        <span>{offer.ami ? `${offer.ami}% AMI` : "AMI not listed"} · {household}</span>
       </div>
       <div className="offer-numbers">
-        <strong>{offer.rent != null ? `${formatMoney(offer.rent)}/mo` : "Verify rent"}</strong>
+        <strong>{rent}</strong>
         <span>
           {band
             ? `${formatMoney(band.minimumIncome)}–${formatMoney(band.maximumIncome)} income`
@@ -250,7 +293,7 @@ function DetailPanel({
 }) {
   const [photoIndex, setPhotoIndex] = useState(0);
   useEffect(() => setPhotoIndex(0), [listing?.id]);
-  if (!listing && !loading) return null;
+  if (!listing && !loading && !error) return null;
   const isShowcase = listing?.source === "showcase";
   const photos = listing?.photos ?? [];
   const activePhoto = photos[photoIndex] ?? listing?.photo ?? null;
@@ -262,7 +305,7 @@ function DetailPanel({
     <div className="detail-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <aside className="detail-panel" role="dialog" aria-modal="true" aria-label={listing?.title ?? "Listing details"}>
         <div className="detail-topbar">
-          <span>{isShowcase ? "Recorded Precheck case study" : "Super pre-rental report"}</span>
+          <span>{isShowcase ? "Recorded Precheck case study" : `${listing?.providerLabel ?? "Listing provider"} · Super pre-rental report`}</span>
           <button type="button" onClick={onClose} aria-label="Close listing details">Close ×</button>
         </div>
         {loading && !listing ? <Thinking label="Loading the full building record" /> : null}
@@ -281,7 +324,7 @@ function DetailPanel({
               ) : (
                 <div className="photo-placeholder"><span>Super</span></div>
               )}
-              <div className="gallery-label">Development photos · exact unit may differ</div>
+              <div className="gallery-label">Provider development photos · exact unit may differ</div>
               {photos.length > 1 ? (
                 <div className="gallery-controls">
                   <button type="button" onClick={() => setPhotoIndex((photoIndex - 1 + photos.length) % photos.length)} aria-label="Previous photo">←</button>
@@ -295,22 +338,28 @@ function DetailPanel({
               <header className="detail-heading">
                 <div>
                   <div className={`detail-status ${listing.eligibility.status}`}>
-                    {isShowcase ? "Recorded case study" : listing.eligibility.status === "eligible" ? "You match at least one unit band" : "Not an exact match"}
+                    {isShowcase
+                      ? "Recorded case study"
+                      : listing.eligibility.status === "eligible"
+                        ? "You match at least one unit band"
+                        : listing.eligibility.status === "unknown"
+                          ? "Eligibility needs provider verification"
+                          : "Not an exact match"}
                   </div>
                   <h2>{listing.title}</h2>
                   <p>{listing.address} · {[listing.neighborhood, listing.borough].filter(Boolean).join(", ")}</p>
                 </div>
                 <div className="detail-rent">
                   <strong>{isShowcase ? "Building record only" : rentLabel(listing)}</strong>
-                  <span>{isShowcase ? "Not currently for rent" : `Apply by ${formatDate(listing.deadline)}`}</span>
+                  <span>{isShowcase ? "Not currently for rent" : listingDeadline(listing)}</span>
                 </div>
               </header>
 
               <div className="detail-summary-grid">
-                <div><span>Eligibility</span><strong>{isShowcase ? "Case study" : listing.eligibility.status === "eligible" ? "Exact" : "Near"}</strong></div>
+                <div><span>Eligibility</span><strong>{isShowcase ? "Case study" : listing.eligibility.status === "eligible" ? "Exact" : listing.eligibility.status === "near" ? "Near" : "Verify"}</strong></div>
                 <div><span>Building record</span><strong>{listing.risk.level}</strong></div>
                 <div><span>Open violations</span><strong>{listing.risk.openCount == null ? "Unavailable" : listing.risk.openCount}</strong></div>
-                <div><span>Violation Precheck</span><strong>{listing.precheck.total == null ? "Pricing unavailable" : formatMoney(listing.precheck.total)}</strong></div>
+                <div><span>Precheck cost</span><strong>{listing.precheck.total == null ? "Pricing unavailable" : formatMoney(listing.precheck.total)}</strong></div>
               </div>
 
               <section className="detail-section">
@@ -322,7 +371,13 @@ function DetailPanel({
               </section>
 
               {!isShowcase ? <section className="detail-section">
-                <div className="section-title-row"><div><div className="section-kicker">Exact requirements</div><h3>Available unit bands</h3></div><span>{listing.units} lottery units</span></div>
+                <div className="section-title-row">
+                  <div>
+                    <div className="section-kicker">Published requirements</div>
+                    <h3>{listing.provider === "housing-connect" ? "Available unit bands" : "Provider-published unit details"}</h3>
+                  </div>
+                  <span>{listing.units ? `${listing.units} listed units` : "Availability varies"}</span>
+                </div>
                 <div className="offer-list">
                   {listing.offers.map((offer) => (
                     <OfferRow key={offer.id} offer={offer} matched={listing.matchedOfferIds.includes(offer.id)} householdSize={householdSize} />
@@ -338,7 +393,7 @@ function DetailPanel({
                 </div>
                 <div>
                   <div className="section-kicker">Nearby transit</div>
-                  <h3>{listing.transit.length ? `${listing.transit.join(" · ")} trains` : "Transit details unavailable"}</h3>
+                  <SubwayLines lines={listing.transit} />
                   <ul className="nearby-list">
                     {listing.nearby.filter((place) => /Subway|Train/i.test(place.type)).slice(0, 5).map((place) => (
                       <li key={`${place.name}-${place.train}`}>{place.name}{place.train ? ` · ${place.train}` : ""}</li>
@@ -396,7 +451,7 @@ function DetailPanel({
               <section className="detail-section action-grid">
                 <div className="precheck-card">
                   <div className="section-kicker">Shopify violation Precheck + optional move-in fit</div>
-                  <h3>{listing.precheck.total == null ? "Violation-kit pricing unavailable" : `${formatMoney(listing.precheck.total)} one time for violation mitigations`}</h3>
+                  <h3>{listing.precheck.total == null ? "Live Shopify pricing unavailable" : `${formatMoney(listing.precheck.total)} one time for violation mitigations`}</h3>
                   <p>Violation-backed mitigations determine the Precheck total. Optional fit items use public building facts, nearby transit, and carefully limited development-photo cues and are priced separately.</p>
                   {!listing.precheck.categories.length ? <p>No safe renter-scale or apartment-fit item was identified.</p> : null}
                   {listing.precheck.items.map((item) => (
@@ -429,8 +484,16 @@ function DetailPanel({
                 </div>
               </section>
 
-              {!isShowcase ? <a className="apply-button" href={listing.applyUrl} target="_blank" rel="noreferrer">Apply on Housing Connect <span>↗</span></a> : null}
-              <p className="official-note">{isShowcase ? "Recorded public-data case study. It demonstrates Super's analysis and is not an available apartment." : "Super checks public records and eligibility bands. Applications and final determinations stay with NYC Housing Connect."}</p>
+              {!isShowcase && listing.applyUrl ? (
+                <a className="apply-button" href={listing.applyUrl} target="_blank" rel="noreferrer">
+                  {providerActionLabel(listing)} <span>↗</span>
+                </a>
+              ) : !isShowcase ? <p className="application-unavailable">Official application link unavailable · verify with {listing.providerLabel}</p> : null}
+              <p className="official-note">
+                {isShowcase
+                  ? "Recorded public-data case study. It demonstrates Super's analysis and is not an available apartment."
+                  : `Super checks public records and published eligibility details. Applications, current availability, and final determinations stay with ${listing.providerLabel}.`}
+              </p>
             </div>
           </>
         ) : null}
@@ -443,13 +506,16 @@ export default function Marketplace() {
   const [brief, setBrief] = useState("");
   const [householdSize, setHouseholdSize] = useState("2");
   const [annualIncome, setAnnualIncome] = useState("75000");
+  const [submittedInput, setSubmittedInput] = useState<RenterBrief | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [plan, setPlan] = useState<SearchPlan | null>(null);
   const [checks, setChecks] = useState<Check[]>([]);
   const [partial, setPartial] = useState<MarketplaceListing[]>([]);
   const [exact, setExact] = useState<MarketplaceListing[]>([]);
   const [near, setNear] = useState<MarketplaceListing[]>([]);
+  const [unknown, setUnknown] = useState<MarketplaceListing[]>([]);
   const [showcase, setShowcase] = useState<MarketplaceListing | null>(null);
+  const [inspectedTotal, setInspectedTotal] = useState(0);
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MarketplaceListing | null>(null);
@@ -461,15 +527,16 @@ export default function Marketplace() {
   const initialDeepLinkHandled = useRef(false);
 
   const allListings = useMemo(() => {
-    const source = exact.length || near.length ? [...exact, ...near] : partial;
+    const source = exact.length || near.length || unknown.length ? [...exact, ...near, ...unknown] : partial;
     return unique(source.map((listing) => listing.id)).map((id) => source.find((listing) => listing.id === id)!);
-  }, [exact, near, partial]);
+  }, [exact, near, partial, unknown]);
 
   const precheckSpotlight = phase === "searching"
     ? null
     : allListings.find((listing) => listing.spotlight === "precheck") ?? showcase;
   const visibleExact = exact.filter((listing) => listing.id !== precheckSpotlight?.id);
   const visibleNear = near.filter((listing) => listing.id !== precheckSpotlight?.id);
+  const visibleUnknown = unknown.filter((listing) => listing.id !== precheckSpotlight?.id);
 
   const markers = useMemo<CityResultMarker[]>(
     () =>
@@ -495,11 +562,12 @@ export default function Marketplace() {
     } else if (event.stage === "plan") {
       setPlan(event.plan);
       setCheck("planning", `Brief parsed ${event.plan.generatedBy === "agent" ? "by the agent" : "with deterministic fallback"}`, "done");
-      setCheck("inventory", "Searching active Housing Connect lotteries", "active");
+      setCheck("inventory", "Searching active affordable-housing sources", "active");
     } else if (event.stage === "inventory") {
-      setCheck("inventory", `${event.count} active lotteries loaded${event.source === "snapshot" ? " from fallback snapshot" : " live"}`, "done");
+      setCheck("inventory", `${event.message}${event.source === "snapshot" ? " · Housing Connect snapshot fallback active" : ""}`, "done");
       setCheck("eligibility", "Checking exact rent, bedroom, household, and income bands", "active");
     } else if (event.stage === "inspecting") {
+      setInspectedTotal(event.total);
       if (event.completed === 0) {
         setCheck("eligibility", "Exact unit bands loaded", "done");
         setCheck("records", "Resolving BBL/BIN and reading open HPD records", "active");
@@ -514,6 +582,7 @@ export default function Marketplace() {
     } else if (event.stage === "results") {
       setExact(event.exact);
       setNear(event.near);
+      setUnknown(event.unknown ?? []);
       setShowcase(event.showcase ?? null);
       setCheck("pricing", "Violation and apartment-fit items checked against Shopify", "done");
     } else if (event.stage === "done") {
@@ -541,17 +610,20 @@ export default function Marketplace() {
     const controller = new AbortController();
     abort.current = controller;
     setPhase("searching");
+    setSubmittedInput(input);
     setPlan(null);
     setChecks([]);
     setPartial([]);
     setExact([]);
     setNear([]);
+    setUnknown([]);
     setShowcase(null);
+    setInspectedTotal(0);
     setError("");
     setSelectedId(null);
     setDetail(null);
     setDetailError("");
-    replaceListingQuery(null);
+    updateListingQuery(null);
     try {
       const response = await fetch("/api/marketplace/search", {
         method: "POST",
@@ -598,14 +670,25 @@ export default function Marketplace() {
       detailAbort.current = controller;
       const requestNumber = detailRequest.current + 1;
       detailRequest.current = requestNumber;
-      if (updateUrl) replaceListingQuery(id);
+      if (updateUrl) {
+        const hasOpenListing = Boolean(new URLSearchParams(window.location.search).get("listing"));
+        updateListingQuery(id, hasOpenListing ? "replace" : "push");
+      }
       setSelectedId(id);
       setDetail(allListings.find((listing) => listing.id === id) ?? (showcase?.id === id ? showcase : null));
       setDetailLoading(true);
       setDetailError("");
-      const params = new URLSearchParams({ id, brief, householdSize, annualIncome });
       try {
-        const response = await fetch(`/api/marketplace/listing?${params}`, { signal: controller.signal });
+        const response = submittedInput
+          ? await fetch("/api/marketplace/listing", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ id, input: submittedInput }),
+              signal: controller.signal,
+            })
+          : await fetch(`/api/marketplace/listing?id=${encodeURIComponent(id)}`, {
+              signal: controller.signal,
+            });
         const body = await response.json();
         if (!response.ok) throw new Error(body?.error ?? "Listing details unavailable");
         if (detailRequest.current !== requestNumber) return;
@@ -617,17 +700,24 @@ export default function Marketplace() {
         if (detailRequest.current === requestNumber) setDetailLoading(false);
       }
     },
-    [allListings, annualIncome, brief, householdSize, showcase]
+    [allListings, showcase, submittedInput]
   );
 
   const closeListing = useCallback(() => {
+    if (
+      window.history.state?.superListingEntry &&
+      new URLSearchParams(window.location.search).has("listing")
+    ) {
+      window.history.back();
+      return;
+    }
     detailAbort.current?.abort();
     detailRequest.current += 1;
     setSelectedId(null);
     setDetail(null);
     setDetailError("");
     setDetailLoading(false);
-    replaceListingQuery(null);
+    updateListingQuery(null);
   }, []);
 
   useEffect(() => () => {
@@ -640,6 +730,24 @@ export default function Marketplace() {
     initialDeepLinkHandled.current = true;
     const id = new URLSearchParams(window.location.search).get("listing");
     if (id) void openListing(id, false);
+  }, [openListing]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const id = new URLSearchParams(window.location.search).get("listing");
+      if (id) {
+        void openListing(id, false);
+        return;
+      }
+      detailAbort.current?.abort();
+      detailRequest.current += 1;
+      setSelectedId(null);
+      setDetail(null);
+      setDetailError("");
+      setDetailLoading(false);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
   }, [openListing]);
 
   useEffect(() => {
@@ -657,15 +765,15 @@ export default function Marketplace() {
     <main className="market-shell">
       <nav className="market-nav">
         <a className="market-wordmark" href="#top" aria-label="Super home"><span>S</span>Super</a>
-        <div><span className="live-dot" /> Live NYC affordable housing</div>
-        <a href="https://housingconnect.nyc.gov/PublicWeb/search-lotteries" target="_blank" rel="noreferrer">Official Housing Connect ↗</a>
+        <div><span className="live-dot" /> NYC affordable housing · multiple sources</div>
+        <a href="https://housingconnect.nyc.gov/PublicWeb/search-lotteries" target="_blank" rel="noreferrer">Housing Connect ↗</a>
       </nav>
 
       <section className="market-hero" id="top">
         <div className="hero-copy">
           <p className="eyebrow">Agentic rental marketplace · New York City</p>
           <h1>Find the apartment.<br />Precheck the building.</h1>
-          <p>Super matches your household to live Housing Connect units, verifies the income math, then reads the building&apos;s inspector-confirmed record before you apply.</p>
+          <p>Super searches Housing Connect and trusted affordable-housing providers, checks the published eligibility math, then reads each building&apos;s inspector-confirmed record before you apply.</p>
         </div>
         <div className="hero-proof"><strong>3 checks Zillow skips</strong><span>Exact eligibility</span><span>Open HPD violations</span><span>One-time Precheck cost</span></div>
       </section>
@@ -703,9 +811,9 @@ export default function Marketplace() {
           {!showResults ? (
             <div className="market-intro">
               <p className="eyebrow">How it works</p>
-              <h2>One search. Three data systems. No chatbot.</h2>
+              <h2>One search. Five housing sources. No chatbot.</h2>
               <div className="intro-steps">
-                <article><span>01</span><strong>Match</strong><p>The agent turns your brief into filters, then deterministic code verifies household, income, bedroom, and rent boundaries.</p></article>
+                <article><span>01</span><strong>Match</strong><p>The agent searches Housing Connect, NYC HDC, Fifth Avenue Committee, Reside, and Langsam; deterministic code verifies every published boundary.</p></article>
                 <article><span>02</span><strong>Inspect</strong><p>Each address is joined to BBL/BIN and checked against open HPD violations, PLUTO, complaints, and building footprints.</p></article>
                 <article><span>03</span><strong>Precheck</strong><p>Only safe renter-scale mitigations are priced. Building-system and life-safety issues stay landlord-action red flags.</p></article>
               </div>
@@ -714,7 +822,7 @@ export default function Marketplace() {
             <>
               <div className="results-heading">
                 <div><p className="eyebrow">Live matches</p><h2>{phase === "searching" ? `${allListings.length} buildings checked so far` : exact.length ? `${exact.length} exact match${exact.length === 1 ? "" : "es"}` : "No exact match yet"}</h2></div>
-                <span>{exact.length + near.length || partial.length} shown · up to 8 inspected</span>
+                <span>{exact.length + near.length + unknown.length || partial.length} shown · {inspectedTotal || 12} inspected</span>
               </div>
               {precheckSpotlight ? (
                 <section className="precheck-spotlight" aria-label="Precheck spotlight">
@@ -738,14 +846,16 @@ export default function Marketplace() {
               {phase === "searching" && !exact.length ? partial.map((listing, index) => <ListingCard key={listing.id} listing={listing} selected={selectedId === listing.id} onOpen={() => openListing(listing.id)} priority={index < 2} />) : null}
               {phase !== "searching" && visibleNear.length ? <div className="near-heading"><strong>Near matches</strong><span>Not eligible as entered · reason shown on every card</span></div> : null}
               {phase !== "searching" ? visibleNear.map((listing) => <ListingCard key={listing.id} listing={listing} selected={selectedId === listing.id} onOpen={() => openListing(listing.id)} />) : null}
-              {phase === "done" && !exact.length && !near.length ? <div className="no-results"><h3>No active listing had enough data to verify a match.</h3><p>Try a broader borough or a higher rent ceiling. Super will keep your income and household boundaries exact.</p></div> : null}
+              {phase !== "searching" && visibleUnknown.length ? <div className="unknown-heading"><strong>Eligibility to verify</strong><span>The provider has not published enough detail for an exact determination</span></div> : null}
+              {phase !== "searching" ? visibleUnknown.map((listing) => <ListingCard key={listing.id} listing={listing} selected={selectedId === listing.id} onOpen={() => openListing(listing.id)} />) : null}
+              {phase === "done" && !exact.length && !near.length && !unknown.length ? <div className="no-results"><h3>No active listing had enough data to verify a match.</h3><p>Try a broader borough or a higher rent ceiling. Super will keep your income and household boundaries exact.</p></div> : null}
             </>
           )}
         </div>
         <div className="map-pane"><CityMap markers={markers} selectedId={selectedId} onSelect={openListing} /></div>
       </section>
 
-      <footer className="market-footer"><span>Super uses public NYC data. Verify all terms with Housing Connect.</span><strong>Built for NYChackathon August 15th by Ryan Lim</strong></footer>
+      <footer className="market-footer"><span>Super uses public NYC and provider data. Verify all terms with the listing provider.</span><strong>Built for NYChackathon August 15th by Ryan Lim</strong></footer>
 
       {selectedId ? <DetailPanel listing={detail} loading={detailLoading} error={detailError} householdSize={Number(householdSize) || 1} onClose={closeListing} /> : null}
     </main>

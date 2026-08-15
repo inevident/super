@@ -136,6 +136,7 @@ export type UnitOffer = {
   bedrooms: number;
   label: string;
   rent: number | null;
+  rentMaximum?: number | null;
   count: number;
   address: string;
   ami: number | null;
@@ -223,6 +224,14 @@ export type Eligibility = {
   reasons: string[];
 };
 
+export type MarketplaceProvider =
+  | "housing-connect"
+  | "nychdc"
+  | "fifthave"
+  | "reside"
+  | "langsam"
+  | "recorded";
+
 export type MarketplaceListing = {
   id: string;
   spotlight?: "precheck";
@@ -252,6 +261,8 @@ export type MarketplaceListing = {
   excludedHistoricalViolations: ViolationRecord[];
   profile: BuildingProfile | null;
   applyUrl: string;
+  provider: MarketplaceProvider;
+  providerLabel: string;
   source: "live" | "snapshot" | "showcase";
 };
 
@@ -266,10 +277,24 @@ export type BuildingAssessment = {
 export type MarketplaceEvent =
   | { stage: "planning"; message: string }
   | { stage: "plan"; plan: SearchPlan }
-  | { stage: "inventory"; message: string; count: number; source: "live" | "snapshot" }
+  | {
+      stage: "inventory";
+      message: string;
+      count: number;
+      source: "live" | "snapshot";
+      housingConnectCount?: number;
+      providerCount?: number;
+      providers?: string[];
+    }
   | { stage: "inspecting"; message: string; completed: number; total: number }
   | { stage: "listing"; listing: MarketplaceListing }
   | { stage: "pricing"; message: string }
-  | { stage: "results"; exact: MarketplaceListing[]; near: MarketplaceListing[]; showcase?: MarketplaceListing }
+  | {
+      stage: "results";
+      exact: MarketplaceListing[];
+      near: MarketplaceListing[];
+      unknown?: MarketplaceListing[];
+      showcase?: MarketplaceListing;
+    }
   | { stage: "done" }
   | { stage: "error"; message: string };

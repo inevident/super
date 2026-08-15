@@ -8,6 +8,8 @@ const DEVELOPMENT_HOSTS = new Set([
   "www.fifthave.org",
 ]);
 
+const LOCAL_LISTING_IMAGE_PREFIX = "/listing-images/";
+
 function allowedHttpsUrl(value: string | null | undefined, hosts: Set<string>) {
   try {
     const url = new URL(value ?? "");
@@ -26,6 +28,19 @@ export function isDevelopmentPhotoSource(
     url.pathname.startsWith("/MailTemplates/photos/");
 }
 
+export function isListingPhotoSource(value: string | null | undefined): value is string {
+  if (value?.startsWith("/")) {
+    try {
+      const url = new URL(value, "https://super.local");
+      return url.origin === "https://super.local" &&
+        url.pathname.startsWith(LOCAL_LISTING_IMAGE_PREFIX);
+    } catch {
+      return false;
+    }
+  }
+  return isDevelopmentPhotoSource(value);
+}
+
 export function isDisplayImageSource(value: string | null | undefined): value is string {
-  return isDevelopmentPhotoSource(value) || allowedHttpsUrl(value, new Set(["cdn.shopify.com"]));
+  return isListingPhotoSource(value) || allowedHttpsUrl(value, new Set(["cdn.shopify.com"]));
 }

@@ -62,6 +62,8 @@ function listing(overrides: Partial<MarketplaceListing> = {}): MarketplaceListin
     excludedHistoricalViolations: [],
     profile: null,
     applyUrl: "https://example.com/apply",
+    provider: "housing-connect",
+    providerLabel: "NYC Housing Connect",
     source: "snapshot",
     ...overrides,
   };

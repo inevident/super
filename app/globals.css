@@ -292,6 +292,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .eligibility-pill.eligible { color: var(--green); }
 .eligibility-pill.near { color: var(--amber); }
 .eligibility-pill.unknown { color: var(--muted); }
+.provider-pill { position: absolute; right: 10px; bottom: 10px; max-width: calc(100% - 20px); padding: 5px 8px; border-radius: 999px; overflow: hidden; background: rgba(18,20,17,.82); color: #fff; backdrop-filter: blur(8px); font: 7px var(--mono); letter-spacing: .06em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
 .market-card-body { min-width: 0; padding: 16px 17px; display: flex; flex-direction: column; }
 .card-price-row { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
 .card-price-row strong { font-size: 20px; letter-spacing: -.025em; }
@@ -300,6 +301,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .card-location, .card-units, .match-reason, .near-reason { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--muted); }
 .card-location { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-units { margin-top: 4px; font-family: var(--mono); font-size: 9px; color: var(--quiet); }
+.subway-lines { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 9px; font-family: var(--mono); font-size: 8px; color: var(--quiet); text-transform: uppercase; letter-spacing: .08em; }
+.subway-lines > span { margin-right: 2px; }
+.subway-lines i { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font-family: Arial, sans-serif; font-size: 10px; font-style: normal; font-weight: 700; letter-spacing: 0; line-height: 1; }
+.subway-lines em { font-size: 8px; font-style: normal; text-transform: none; letter-spacing: 0; }
 .match-reason, .near-reason { margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line); }
 .near-reason { color: var(--amber); }
 .card-badges { margin-top: auto; padding-top: 12px; display: flex; flex-wrap: wrap; gap: 5px; }
@@ -309,9 +314,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .risk-high { background: var(--red-wash); color: var(--red); }
 .risk-unavailable { background: var(--wash-2); color: var(--muted); }
 .precheck-badge { background: var(--wash); color: var(--muted); }
-.near-heading { margin: 30px 0 12px; padding-top: 15px; border-top: 1px solid var(--ink); display: flex; justify-content: space-between; gap: 12px; }
-.near-heading strong { font-size: 16px; }
-.near-heading span { font-family: var(--mono); font-size: 8px; color: var(--amber); text-transform: uppercase; text-align: right; }
+.near-heading, .unknown-heading { margin: 30px 0 12px; padding-top: 15px; border-top: 1px solid var(--ink); display: flex; justify-content: space-between; gap: 12px; }
+.near-heading strong, .unknown-heading strong { font-size: 16px; }
+.near-heading span, .unknown-heading span { font-family: var(--mono); font-size: 8px; color: var(--amber); text-transform: uppercase; text-align: right; }
+.unknown-heading { border-top-color: var(--line-dark); }
+.unknown-heading span { color: var(--muted); }
 .no-results { padding: 32px; border: 1px solid var(--line); border-radius: 14px; background: var(--wash); }
 .no-results h3 { margin: 0 0 8px; }
 .no-results p { color: var(--muted); font-size: 13px; }
@@ -442,6 +449,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .apply-button { margin-top: 40px; min-height: 58px; padding: 0 20px; border-radius: 11px; background: var(--ink); color: #fff; display: flex; align-items: center; justify-content: space-between; text-decoration: none; font-weight: 700; }
 .apply-button:hover { background: #292c28; }
 .apply-button span { font-size: 20px; }
+.application-unavailable { margin-top: 40px; padding: 16px 18px; border: 1px dashed var(--line-dark); border-radius: 11px; color: var(--quiet); font: 9px var(--mono); text-align: center; text-transform: uppercase; }
 .official-note { margin: 10px 20px 0; text-align: center; color: var(--quiet); font-size: 9px; line-height: 1.5; }
 
 /* Supplemental teammate inventory. The live marketplace above remains primary. */

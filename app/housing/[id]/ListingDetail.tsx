@@ -2,16 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Listing } from "@/lib/listings";
-
-const subwayColors: Record<string, { background: string; color?: string }> = {
-  "1": { background: "#EE352E" }, "2": { background: "#EE352E" }, "3": { background: "#EE352E" },
-  "4": { background: "#00933C" }, "5": { background: "#00933C" }, "6": { background: "#00933C" },
-  "7": { background: "#B933AD" }, A: { background: "#0039A6" }, C: { background: "#0039A6" }, E: { background: "#0039A6" },
-  B: { background: "#FF6319" }, D: { background: "#FF6319" }, F: { background: "#FF6319" }, M: { background: "#FF6319" },
-  G: { background: "#6CBE45" }, J: { background: "#996633" }, Z: { background: "#996633" }, L: { background: "#A7A9AC" },
-  N: { background: "#FCCC0A", color: "#111" }, Q: { background: "#FCCC0A", color: "#111" }, R: { background: "#FCCC0A", color: "#111" }, W: { background: "#FCCC0A", color: "#111" },
-  S: { background: "#808183" },
-};
+import { subwayLineStyle } from "@/lib/subway";
 
 export default function ListingDetail({ listing }: { listing: Listing }) {
   const images = listing.imageUrls?.length ? listing.imageUrls : listing.imageUrl ? [listing.imageUrl] : [];
@@ -50,7 +41,7 @@ export default function ListingDetail({ listing }: { listing: Listing }) {
         </div>
       </section>
 
-      <section className="detail-map-section"><div><h2>Location</h2><p>{listing.address}</p>{stations.length ? <div className="nearby-transit"><h3>Nearby subway</h3>{stations.map((station) => <div className="station" key={station.name}><span className="route-dots">{station.routes.map((route) => <b key={route} style={subwayColors[route] ?? subwayColors.S}>{route}</b>)}</span><span><strong>{station.name}</strong><small>{station.distanceMiles < .1 ? station.distanceMiles.toFixed(2) : station.distanceMiles.toFixed(1)} mi away</small></span></div>)}</div> : <p className="transit-loading">Finding nearby subway stations…</p>}</div><iframe title={`Map of ${listing.address}`} src={`https://www.google.com/maps?q=${mapQuery}&output=embed`} loading="lazy" referrerPolicy="no-referrer-when-downgrade" /></section>
+      <section className="detail-map-section"><div><h2>Location</h2><p>{listing.address}</p>{stations.length ? <div className="nearby-transit"><h3>Nearby subway</h3>{stations.map((station) => <div className="station" key={station.name}><span className="route-dots">{station.routes.map((route) => <b key={route} style={subwayLineStyle(route)}>{route}</b>)}</span><span><strong>{station.name}</strong><small>{station.distanceMiles < .1 ? station.distanceMiles.toFixed(2) : station.distanceMiles.toFixed(1)} mi away</small></span></div>)}</div> : <p className="transit-loading">Finding nearby subway stations…</p>}</div><iframe title={`Map of ${listing.address}`} src={`https://www.google.com/maps?q=${mapQuery}&output=embed`} loading="lazy" referrerPolicy="no-referrer-when-downgrade" /></section>
 
     </main>
   );

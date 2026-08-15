@@ -115,6 +115,8 @@ export function recordedPrecheckShowcase(): MarketplaceListing {
     excludedHistoricalViolations: [],
     profile: DEMO_PROFILE,
     applyUrl: "",
+    provider: "recorded",
+    providerLabel: "Recorded public-data case",
     source: "showcase",
   };
 }

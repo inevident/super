@@ -2,19 +2,28 @@ import { describe, expect, it, vi } from "vitest";
 import { groupUnitOffers } from "../lib/housing-connect";
 import { DEMO_PICKS, DEMO_STEPS } from "../lib/fixtures";
 import {
+  chooseProviderCandidates,
   chooseMarketplaceCandidates,
   evaluateEligibility,
+  initialRecordPrecheck,
   mapWithConcurrency,
   nearbyViolationHint,
+  providerListingBase,
+  providerUnitOffers,
+  safeProviderApplyUrl,
   selectMarketplaceListings,
 } from "../lib/marketplace";
+import { isListingPhotoSource } from "../lib/image-policy";
+import { normalizeListingRecord, type Listing } from "../lib/listings";
 import { calculateRisk, filterRedevelopmentViolations } from "../lib/nyc";
 import { parseBriefDeterministically } from "../lib/planner";
 import { recordedPrecheckShowcase } from "../lib/showcase";
 import {
   buildLandlordRedFlags,
   buildPrecheckRequirements,
+  pickPrecheckProduct,
   pricePrecheckKits,
+  precheckProductMatchScore,
   productMatchesPrecheck,
   selectPrecheckCatalogRequirements,
   selectPrecheckCatalogTasks,
@@ -84,6 +93,8 @@ function listing(overrides: Partial<MarketplaceListing> = {}): MarketplaceListin
     excludedHistoricalViolations: [],
     profile: null,
     applyUrl: "https://housingconnect.nyc.gov/PublicWeb/details/1",
+    provider: "housing-connect",
+    providerLabel: "NYC Housing Connect",
     source: "snapshot",
   };
   return { ...base, ...overrides };
@@ -168,6 +179,91 @@ describe("Housing Connect units and eligibility", () => {
   });
 });
 
+describe("provider marketplace inventory", () => {
+  const renter = { brief: "studio in Brooklyn under $1,000", householdSize: 2, annualIncome: 60_000 };
+  const plan: SearchPlan = {
+    boroughs: ["Brooklyn"], neighborhoods: [], bedrooms: { min: 0, max: 0 }, maxRent: 1_000,
+    subwayLines: [], amenities: [], priorities: [], generatedBy: "rules",
+  };
+
+  it("keeps every published HDC layout and marks range-only eligibility for verification", () => {
+    const source: Listing = {
+      id: "nychdc-range-test",
+      source: "nychdc",
+      name: "Range Test",
+      address: "90 Sands Street, DUMBO, NY 11201",
+      borough: "Brooklyn",
+      affordable: true,
+      unitSize: "1-Bedroom, Studio",
+      rent: 537,
+      rentRange: "$537 - $2,132",
+      applicationUrl: "https://www.nychdc.com/sites/default/files/2026-08/range-test.pdf",
+      imageUrls: [
+        "https://www.nychdc.com/sites/default/files/range-test.jpg",
+        "/listing-images/range-test/1.webp",
+        "https://evil.example/range-test.jpg",
+      ],
+    };
+
+    const offers = providerUnitOffers(source, renter);
+    expect(offers.map((offer) => offer.label)).toEqual(["Studio", "1 Bedroom"]);
+    expect(offers.every((offer) => offer.rent === 537 && offer.rentMaximum === 2_132)).toBe(true);
+
+    const converted = providerListingBase(source, renter, plan);
+    expect(converted).toMatchObject({
+      provider: "nychdc",
+      providerLabel: "NYC Housing Development Corporation",
+      source: "snapshot",
+      eligibility: { status: "unknown" },
+    });
+    expect(converted?.photos).toEqual([
+      "https://www.nychdc.com/sites/default/files/range-test.jpg",
+      "/listing-images/range-test/1.webp",
+    ]);
+    expect(converted?.eligibility.reasons).toContain("Household-size rule is unavailable");
+    expect(converted?.eligibility.reasons).toContain("Exact income band is unavailable");
+  });
+
+  it("accepts only allowlisted provider application URLs and listing images", () => {
+    expect(safeProviderApplyUrl("reside", "https://airtable.com/app123/form")).toContain("airtable.com");
+    expect(safeProviderApplyUrl("reside", "https://airtable.com.evil.example/form")).toBe("");
+    expect(safeProviderApplyUrl("nychdc", "https://www.nychdc.com/not-an-application")).toBe("");
+    expect(isListingPhotoSource("/listing-images/building/1.webp")).toBe(true);
+    expect(isListingPhotoSource("/listing-images/../secret.webp")).toBe(false);
+    expect(isListingPhotoSource("https://evil.example/building.webp")).toBe(false);
+  });
+
+  it("quarantines malformed snapshot rows before they reach streamed search", () => {
+    expect(normalizeListingRecord({ source: "reside", id: "../../bad" })).toBeNull();
+    expect(normalizeListingRecord({
+      source: "reside",
+      id: "reside-safe",
+      name: "Safe listing",
+      address: "1 Test Street",
+      borough: "Brooklyn",
+      affordable: true,
+      rent: "not-a-number",
+    })).toMatchObject({ id: "reside-safe", rent: undefined });
+  });
+
+  it("reserves a candidate for every available provider source", () => {
+    const providers = ["nychdc", "reside", "fifthave", "langsam"];
+    const inventory = providers.flatMap((source, index) => [0, 1].map((variant): Listing => ({
+      id: `${source}-${variant}`,
+      source,
+      name: `${source} ${variant}`,
+      address: `${index + 1} Test Street, Brooklyn, NY 11201`,
+      borough: "Brooklyn",
+      affordable: true,
+      unitSize: "Studio",
+      rent: 800 + variant,
+    })));
+
+    expect(new Set(chooseProviderCandidates(inventory, renter, plan).map((item) => item.source)))
+      .toEqual(new Set(providers));
+  });
+});
+
 describe("building record", () => {
   it("excludes open records that predate the current structure", () => {
     const old = violation({ id: "old", inspectionDate: "2021-01-01T00:00:00.000" });
@@ -175,6 +271,11 @@ describe("building record", () => {
     const filtered = filterRedevelopmentViolations([old, current], 2025);
     expect(filtered.current.map((item) => item.id)).toEqual(["new"]);
     expect(filtered.historical.map((item) => item.id)).toEqual(["old"]);
+  });
+
+  it("returns $0 only for a fully checked clean building record", () => {
+    expect(initialRecordPrecheck([], true)).toMatchObject({ total: 0, pricingStatus: "priced" });
+    expect(initialRecordPrecheck([], false)).toMatchObject({ total: null, pricingStatus: "unavailable" });
   });
 
   it("uses severity, recency, and unit count for a named risk level", () => {
@@ -277,6 +378,56 @@ describe("safe Precheck kit", () => {
     )).toBe(true);
   });
 
+  it("accepts a safe 70% catalog match without weakening hard exclusions", () => {
+    expect(precheckProductMatchScore("lead-dust", "PuroAir 240 HEPA Air Purifier")).toBe(0.7);
+    expect(precheckProductMatchScore("lead-dust", "True HEPA Replacement Filter Pack")).toBe(0);
+    expect(precheckProductMatchScore("heat", "Portable Propane Heater")).toBe(0);
+    expect(precheckProductMatchScore(
+      "vermin",
+      "Enclosed Mouse Trap Station",
+      "enclosed roach trap station indoor apartment"
+    )).toBe(0);
+
+    const product = pickPrecheckProduct("lead-dust", [
+      {
+        title: "PuroAir 240 HEPA Air Purifier",
+        price: 124.99,
+        currency: "USD",
+        url: "https://shop.example/purifier",
+        merchant: "shop.example",
+      },
+      {
+        title: "True HEPA Replacement Filter Pack",
+        price: 19.99,
+        currency: "USD",
+        url: "https://shop.example/filter",
+        merchant: "shop.example",
+      },
+    ], "compact true hepa air purifier small room");
+
+    expect(product?.title).toBe("PuroAir 240 HEPA Air Purifier");
+  });
+
+  it("uses an approximate safe product to complete the live violation total", async () => {
+    const categories = buildPrecheckRequirements([
+      violation({ description: "REMEDIATE LEAD-BASED PAINT" }),
+    ]);
+    const [priced] = await pricePrecheckKits([
+      listing({
+        precheck: { categories, items: [], total: null, pricingStatus: "unavailable", oneTime: true },
+      }),
+    ], async () => [{
+      title: "PuroAir 130i Smart HEPA Air Purifier",
+      price: 124.99,
+      currency: "USD",
+      url: "https://shop.example/purifier",
+      merchant: "shop.example",
+    }]);
+
+    expect(priced.precheck).toMatchObject({ total: 124.99, pricingStatus: "priced" });
+    expect(priced.precheck.items[0].product?.title).toContain("Air Purifier");
+  });
+
   it("keeps the recorded scanner fallback renter-scale and glue-free", () => {
     expect(DEMO_PICKS.map((pick) => pick.need.label)).toEqual([
       "enclosed traps",
@@ -290,6 +441,14 @@ describe("safe Precheck kit", () => {
   it("prices a clean building at $0 without calling Shopify", async () => {
     const [clean] = await pricePrecheckKits([listing()]);
     expect(clean.precheck).toMatchObject({ total: 0, pricingStatus: "priced", items: [] });
+  });
+
+  it("does not convert an unavailable building record into a $0 kit", async () => {
+    const [unknown] = await pricePrecheckKits([listing({
+      risk: { ...LOW_RISK, level: "Unavailable", openCount: null },
+      precheck: { categories: [], items: [], total: null, pricingStatus: "unavailable", oneTime: true },
+    })]);
+    expect(unknown.precheck).toMatchObject({ total: null, pricingStatus: "unavailable" });
   });
 
   it("deduplicates catalog work, caps it at five, and prices violation needs first", () => {
@@ -575,7 +734,7 @@ describe("marketplace result selection", () => {
     )).toHaveLength(6);
   });
 
-  it("caps retained results at eight when several risky buildings are actionable", () => {
+  it("caps retained results at ten when several risky buildings are actionable", () => {
     const riskyViolation = violation({ class: "C", description: "ERADICATE MICE" });
     const plan: SearchPlan = {
       boroughs: [], neighborhoods: [], bedrooms: null, maxRent: null,
@@ -601,7 +760,7 @@ describe("marketplace result selection", () => {
       plan
     );
 
-    expect(selected).toHaveLength(8);
+    expect(selected).toHaveLength(10);
     expect(selected.filter((item) => item.spotlight === "precheck")).toHaveLength(1);
   });
 });

@@ -17,6 +17,7 @@ import {
 import { planRenterSearch } from "./planner";
 import { buildLandlordRedFlags, buildPrecheckRequirements, pricePrecheckKits } from "./precheck";
 import { getListing, searchListings, type Listing } from "./listings";
+import { lookupNearbySubway } from "./transit";
 import type {
   Address,
   BuildingAssessment,
@@ -434,9 +435,22 @@ export async function enrichListing(listing: MarketplaceListing): Promise<Market
     assessments.flatMap((assessment) => assessment.excludedHistoricalViolations)
   );
   const categories = buildPrecheckRequirements(violations);
+  const primaryBuilding = identities[0]?.building;
+  const subwayStations = primaryBuilding
+    ? await lookupNearbySubway(
+        `${primaryBuilding.address}, ${primaryBuilding.city || listing.borough}, NY ${primaryBuilding.zip}`,
+        primaryBuilding.latitude,
+        primaryBuilding.longitude
+      )
+    : [];
+  const addressTransit = unique(subwayStations.flatMap((station) => station.routes));
   const enriched: MarketplaceListing = {
     ...listing,
     buildings: identities.map((identity) => identity.building),
+    transit: addressTransit.length ? addressTransit : listing.transit,
+    nearby: subwayStations.length
+      ? subwayStations.map((station) => ({ name: station.name, type: "Subway", train: station.routes.join(" ") }))
+      : listing.nearby,
     risk: aggregateRisk(assessments),
     precheck: categories.length
       ? { categories, items: [], total: null, pricingStatus: "unavailable", oneTime: true }

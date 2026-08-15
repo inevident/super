@@ -1,127 +1,81 @@
 # Super
 
-The AI building super for your new NYC apartment.
+An agentic NYC rental marketplace that checks whether a household qualifies, then checks the building before the renter applies.
 
-Enter an address. Super pulls the building's real public record — open HPD
-violations, 311 complaint history — infers what living there is actually going
-to be like, and builds a real shopping cart against it.
+Super searches active affordable-housing opportunities, verifies household and income bands deterministically, reads NYC HPD records, and builds a Shopify move-in kit from safe renter-scale needs.
 
-Built for The New York City Hackathon, August 15 2026.
+Built for The New York City Hackathon, August 15, 2026.
 
----
+## What Super does
 
-## Verified setup
+1. Turns a renter's natural-language brief into borough, neighborhood, bedroom, rent, subway, and amenity preferences.
+2. Searches active NYC Housing Connect inventory and groups duplicate unit rows into readable offers.
+3. Enforces household size, income, bedroom, and rent requirements in code. The model can explain a match but cannot override eligibility.
+4. Resolves each address to NYC building identifiers and checks current HPD violations, PLUTO facts, complaints, and building massing.
+5. Ranks safer eligible listings while retaining a clearly labeled violation-backed Precheck example for the Shopify workflow.
+6. Prices safe items through Shopify's global catalog. The Violation Precheck total includes only documented-condition mitigations; optional building, transit, and development-photo fit items are labeled and priced separately.
 
-Every command below was run against production and confirmed working. No API
-keys, no signups, no approvals anywhere in this stack.
+## Agent and model behavior
 
-### Shopify UCP (commerce spine)
+OpenRouter stays server-side. The primary model is `google/gemma-4-31b-it:free`; a rate limit, provider timeout, or missing required tool call falls through immediately to `openai/gpt-oss-20b:free`, then the remaining configured fallback models. Authentication, billing, and bad-request errors fail directly instead of multiplying requests. If no model responds, brief parsing and eligibility still work through deterministic rules.
 
-`@shopify/ucp-cli` v0.6.3 — searches the global Shopify catalog across millions
-of products from real merchants. Returns real variant IDs, live prices,
-availability, images, and buyable URLs.
+When a renter opens a listing, Super can inspect up to three allowlisted development photos for limited visible cues such as exposed windows or a compact room. Photo suggestions are optional, explicitly note that the exact unit may differ, and never diagnose safety conditions from an image. Model evidence is converted into server-owned explanation text before it reaches the UI.
 
-```bash
-npm install -g @shopify/ucp-cli
-ucp profile init --name agent
-ucp catalog search --set /query=space-heater --format json
-```
+## Safety contract
 
-Note the flag shape: the query goes through `--set /query=...`, not as a
-positional argument. A bare `ucp catalog search "space heater"` fails with
-`A query is required`.
+Violation-backed Shopify mappings are deliberately narrow:
 
-Buyer location is a first-class input — this is the hook into the NYC angle:
+- Heat → portable space heater
+- Mold or damp → dehumidifier
+- Vermin → enclosed traps
+- Leaks → leak detector
+- Lead dust → true HEPA purifier, labeled supplemental
 
-```bash
-ucp catalog search \
-  --set /query=window-air-conditioner \
-  --set /context/postal_code=11237 \
-  --set /context/address_region=NY \
-  --format json
-```
+Hot water, gas, electrical, structural, fire-egress, window-guard, and alarm violations remain landlord-action red flags. They never become shopping recommendations. Catalog results are checked again by product title so glue traps, hardwired products, high-voltage equipment, and mismatched categories cannot re-enter as fallbacks.
 
-Register it as an MCP server so an agent can shop natively:
+Optional apartment-fit categories include no-drill privacy shades, removable window insulation, compact white-noise machines, and under-bed storage. Their source is shown as Building fit, Location fit, or Photo-informed instead of HPD violation.
+
+## Run locally
 
 ```bash
-ucp mcp add
+npm install
+npm run dev
 ```
 
-Other subcommands: `cart`, `checkout`, `order`, `discover`, `doctor`, `use`.
-Run `ucp <cmd> --input-schema` to get the exact payload schema for any of them.
-
-### NYC Open Data (data spine)
-
-Plain HTTP GET, no key, no auth. Socrata SoQL query params.
-
-| Dataset | ID | Use |
-|---|---|---|
-| HPD housing violations | `wvxf-dwi5` | Heat, hot water, vermin — per building and apartment |
-| 311 service requests | `erm2-nwe9` | Noise, parking, sanitation — per address and ZIP |
-| Restaurant inspections | `43nn-pn8j` | Grades and violation text by establishment |
+Create `.env.local` with an OpenRouter key to enable model planning and photo analysis:
 
 ```bash
-curl "https://data.cityofnewyork.us/resource/wvxf-dwi5.json?\$limit=5&\$select=violationid,housenumber,streetname,novdescription,currentstatus"
+OPENROUTER_API_KEY=your_key_here
 ```
 
-The `novdescription` field is the narrative fuel — it comes back specific down
-to the apartment and floor.
+NYC Housing Connect, NYC Open Data, Geosearch, and Shopify catalog search are keyless. Without OpenRouter, Super falls back to deterministic planning and skips photo analysis.
 
----
+## Verify
 
-## Architecture
-
-Two spines meeting at one frozen contract.
-
-```
-address ──▶ [data spine] ──▶ { needs } ──▶ [commerce spine] ──▶ cart + checkout
-             HPD / 311                       UCP catalog search
+```bash
+npm test -- --run
+npm run typecheck
+npm run build
 ```
 
-### The contract
+## Main modules
 
-Freeze this before anyone writes code. Both spines build against a hardcoded
-fixture of it, so neither blocks the other and integration is a swap, not a
-merge.
+- `app/components/Marketplace.tsx` — list/map marketplace and listing detail panel
+- `lib/marketplace.ts` — search, deterministic eligibility, ranking, HPD enrichment, and SSE events
+- `lib/housing-connect.ts` — live Housing Connect adapter with snapshot fallback
+- `lib/nyc.ts` — address resolution, HPD records, PLUTO, complaints, and building geometry
+- `lib/contextual-precheck.ts` — bounded building, location, and development-photo recommendations
+- `lib/precheck.ts` — safe category mapping, product validation, and shared Shopify pricing
+- `lib/agent.ts` — OpenRouter/Anthropic clients, tool calling, and model failover
+- `lib/ucp.ts` — Shopify catalog client over UCP MCP JSON-RPC
+- `lib/showcase.ts` — transparent recorded building case used when live inventory has no actionable violation kit
 
-```js
-{
-  needs: [
-    {
-      label:  "space heater",
-      reason: "14 open heat complaints since November",
-      query:  "space heater"      // sent to catalog search
-    }
-  ]
-}
-```
-
-## Team
+## Team workflow
 
 Three people, one owner per seam:
 
-- **Data spine** — address → building profile
-- **Commerce spine** — needs → products → cart → checkout
-- **Surface and story** — the screen, the pitch, the backup video
+- Data and inventory
+- Agent and commerce
+- Marketplace surface and story
 
-Trunk-based. Push to `main`, say out loud what you touched. No branches, no PRs
-— eight hours is too short for the ceremony, and conflicts cost more than
-review saves.
-
----
-
-## Repo status
-
-Private. Flip it public at submission time:
-
-```bash
-gh repo edit --visibility public --accept-visibility-change-consequences
-```
-
-## What's here
-
-- `app/` — single-screen UI, the streaming scan route, address autocomplete
-- `lib/nyc.ts` — address → BBL/BIN → violations, complaints, PLUTO, footprint
-- `lib/ucp.ts` — Shopify UCP catalog client over MCP JSON-RPC
-- `lib/agent.ts` — the tool-calling agent loop and model failover
-- `lib/fixtures.ts` — recorded run powering the offline demo
+Trunk-based: keep changes small, test before pushing, and treat the marketplace implementation on `main` as the integration source of truth.

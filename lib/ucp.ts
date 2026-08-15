@@ -15,17 +15,36 @@ const UCP_TIMEOUT = 12_000;
 const CATALOG_TTL = 5 * 60_000;
 const catalogCache = new Map<string, { expires: number; products: Product[] }>();
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+function abortError() {
+  const error = new Error("Request aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw abortError();
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  externalSignal?: AbortSignal
+) {
   const controller = new AbortController();
+  const abort = () => controller.abort(externalSignal?.reason);
+  externalSignal?.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", abort);
   }
 }
 
-async function call(name: string, args: Record<string, unknown>) {
+async function call(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
+  throwIfAborted(signal);
   const res = await fetchWithTimeout(
     ENDPOINT,
     {
@@ -51,7 +70,8 @@ async function call(name: string, args: Record<string, unknown>) {
       }),
       cache: "no-store",
     },
-    UCP_TIMEOUT
+    UCP_TIMEOUT,
+    signal
   );
 
   if (!res.ok) throw new Error(`UCP ${res.status}`);
@@ -67,7 +87,12 @@ async function call(name: string, args: Record<string, unknown>) {
   return payload.result?.structuredContent ?? null;
 }
 
-export async function searchCatalog(query: string, zip: string): Promise<Product[]> {
+export async function searchCatalog(
+  query: string,
+  zip: string,
+  signal?: AbortSignal
+): Promise<Product[]> {
+  throwIfAborted(signal);
   const key = `${query.trim().toLowerCase()}|${zip || "10001"}`;
   const cached = catalogCache.get(key);
   if (cached && cached.expires > Date.now()) return cached.products;
@@ -77,7 +102,7 @@ export async function searchCatalog(query: string, zip: string): Promise<Product
       query,
       context: { postal_code: zip || "10001", address_region: "NY" },
     },
-  });
+  }, signal);
 
   const products = sc?.result?.products ?? sc?.products ?? [];
   const normalized = products.flatMap((p: any) => {
@@ -105,11 +130,11 @@ export async function searchCatalog(query: string, zip: string): Promise<Product
 }
 
 // One search per need, in parallel. Sequential is far too slow to demo.
-export async function shopFor(needs: Need[], zip: string) {
+export async function shopFor(needs: Need[], zip: string, signal?: AbortSignal) {
   return Promise.all(
     needs.map(async (need) => {
       try {
-        const products = await searchCatalog(need.query, zip);
+        const products = await searchCatalog(need.query, zip, signal);
         return { need, product: pickBest(products) };
       } catch {
         return { need, product: null };

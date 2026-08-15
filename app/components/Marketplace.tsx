@@ -4,6 +4,7 @@ import Image from "next/image";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CityMap, { type CityResultMarker } from "./CityMap";
 import Massing from "./Massing";
+import { isDisplayImageSource } from "@/lib/image-policy";
 import type {
   MarketplaceEvent,
   MarketplaceListing,
@@ -20,6 +21,13 @@ const EXAMPLES = [
   { brief: "Studio or 1 bedroom in Queens with laundry", household: "1", income: "59000" },
   { brief: "Affordable 1 bedroom in the Bronx, lowest rent first", household: "2", income: "72000" },
 ];
+
+const PRECHECK_BASIS_LABEL = {
+  violation: "HPD violation",
+  building: "Building fit",
+  location: "Location fit",
+  photo: "Photo-informed",
+} as const;
 
 function formatMoney(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
@@ -65,16 +73,6 @@ function replaceListingQuery(id: string | null) {
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
-function safeImageSource(source: string | undefined | null) {
-  if (!source) return false;
-  try {
-    const host = new URL(source).hostname;
-    return host === "a806-housingconnectapi.nyc.gov" || host === "cdn.shopify.com";
-  } catch {
-    return false;
-  }
-}
-
 function Thinking({ label }: { label: string }) {
   return (
     <div className="market-thinking" aria-live="polite">
@@ -116,7 +114,7 @@ function ListingCard({
     <article className={`market-card${selected ? " selected" : ""}${listing.eligibility.status !== "eligible" ? " near" : ""}`}>
       <button type="button" className="market-card-button" onClick={onOpen} aria-label={`View ${listing.title}`}>
         <div className="market-card-photo">
-          {listing.photo && safeImageSource(listing.photo) ? (
+          {listing.photo && isDisplayImageSource(listing.photo) ? (
             <Image
               src={listing.photo}
               alt={`Development photo for ${listing.title}`}
@@ -154,12 +152,43 @@ function ListingCard({
             <RiskBadge listing={listing} />
             <span className="precheck-badge">
               {listing.precheck.total != null
-                ? `Precheck kit: ${formatMoney(listing.precheck.total)} one time`
+                ? `Violation Precheck: ${formatMoney(listing.precheck.total)} one time`
                 : listing.precheck.categories.length
-                  ? "Precheck: live pricing unavailable"
+                  ? "Violation Precheck: live pricing unavailable"
                   : "Precheck pending"}
             </span>
           </div>
+        </div>
+      </button>
+    </article>
+  );
+}
+
+function RecordedShowcaseCard({
+  listing,
+  selected,
+  onOpen,
+}: {
+  listing: MarketplaceListing;
+  selected: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <article className={`recorded-showcase-card${selected ? " selected" : ""}`}>
+      <button type="button" onClick={onOpen} aria-label={`Open recorded Precheck for ${listing.address}`}>
+        <div className="recorded-risk">
+          <span>Recorded risk</span>
+          <strong>{listing.risk.level}</strong>
+        </div>
+        <div className="recorded-copy">
+          <span>Public-data building case · not an available apartment</span>
+          <h4>{listing.address}</h4>
+          <p>{listing.risk.openCount?.toLocaleString()} open violations in the captured record · {listing.precheck.categories.map((category) => category.label).join(" · ")}</p>
+        </div>
+        <div className="recorded-cost">
+          <span>Violation Precheck</span>
+          <strong>{listing.precheck.total == null ? "Pricing unavailable" : `${formatMoney(listing.precheck.total)} once`}</strong>
+          <i>Open report →</i>
         </div>
       </button>
     </article>
@@ -222,22 +251,32 @@ function DetailPanel({
   const [photoIndex, setPhotoIndex] = useState(0);
   useEffect(() => setPhotoIndex(0), [listing?.id]);
   if (!listing && !loading) return null;
+  const isShowcase = listing?.source === "showcase";
   const photos = listing?.photos ?? [];
   const activePhoto = photos[photoIndex] ?? listing?.photo ?? null;
   const visibleViolations = listing?.violations.slice(0, 30) ?? [];
+  const optionalItems = listing?.precheck.items.filter((item) => item.optional) ?? [];
+  const optionalTotal = optionalItems.reduce((sum, item) => sum + (item.product?.price ?? 0), 0);
+  const optionalComplete = optionalItems.every((item) => item.product);
   return (
     <div className="detail-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <aside className="detail-panel" role="dialog" aria-modal="true" aria-label={listing?.title ?? "Listing details"}>
         <div className="detail-topbar">
-          <span>Super pre-rental report</span>
+          <span>{isShowcase ? "Recorded Precheck case study" : "Super pre-rental report"}</span>
           <button type="button" onClick={onClose} aria-label="Close listing details">Close ×</button>
         </div>
         {loading && !listing ? <Thinking label="Loading the full building record" /> : null}
         {error ? <div className="market-error">{error}</div> : null}
         {listing ? (
           <>
-            <div className="detail-gallery">
-              {activePhoto && safeImageSource(activePhoto) ? (
+            {isShowcase ? (
+              <div className="case-study-banner">
+                <span>Recorded NYC building record</span>
+                <strong>Not an active rental listing</strong>
+                <p>This case keeps the violation-to-Shopify workflow available when current lotteries are clean or public APIs are temporarily unavailable.</p>
+              </div>
+            ) : <div className="detail-gallery">
+              {activePhoto && isDisplayImageSource(activePhoto) ? (
                 <Image src={activePhoto} alt={`Development photo ${photoIndex + 1} for ${listing.title}`} fill sizes="(max-width: 760px) 100vw, 760px" priority />
               ) : (
                 <div className="photo-placeholder"><span>Super</span></div>
@@ -250,48 +289,48 @@ function DetailPanel({
                   <button type="button" onClick={() => setPhotoIndex((photoIndex + 1) % photos.length)} aria-label="Next photo">→</button>
                 </div>
               ) : null}
-            </div>
+            </div>}
 
             <div className="detail-content">
               <header className="detail-heading">
                 <div>
                   <div className={`detail-status ${listing.eligibility.status}`}>
-                    {listing.eligibility.status === "eligible" ? "You match at least one unit band" : "Not an exact match"}
+                    {isShowcase ? "Recorded case study" : listing.eligibility.status === "eligible" ? "You match at least one unit band" : "Not an exact match"}
                   </div>
                   <h2>{listing.title}</h2>
                   <p>{listing.address} · {[listing.neighborhood, listing.borough].filter(Boolean).join(", ")}</p>
                 </div>
                 <div className="detail-rent">
-                  <strong>{rentLabel(listing)}</strong>
-                  <span>Apply by {formatDate(listing.deadline)}</span>
+                  <strong>{isShowcase ? "Building record only" : rentLabel(listing)}</strong>
+                  <span>{isShowcase ? "Not currently for rent" : `Apply by ${formatDate(listing.deadline)}`}</span>
                 </div>
               </header>
 
               <div className="detail-summary-grid">
-                <div><span>Eligibility</span><strong>{listing.eligibility.status === "eligible" ? "Exact" : "Near"}</strong></div>
+                <div><span>Eligibility</span><strong>{isShowcase ? "Case study" : listing.eligibility.status === "eligible" ? "Exact" : "Near"}</strong></div>
                 <div><span>Building record</span><strong>{listing.risk.level}</strong></div>
                 <div><span>Open violations</span><strong>{listing.risk.openCount == null ? "Unavailable" : listing.risk.openCount}</strong></div>
-                <div><span>Precheck cost</span><strong>{listing.precheck.total == null ? "Pricing unavailable" : formatMoney(listing.precheck.total)}</strong></div>
+                <div><span>Violation Precheck</span><strong>{listing.precheck.total == null ? "Pricing unavailable" : formatMoney(listing.precheck.total)}</strong></div>
               </div>
 
               <section className="detail-section">
                 <div className="section-kicker">Why Super picked it</div>
                 <h3>{listing.matchExplanation}</h3>
-                {listing.eligibility.reasons.length ? (
+                {!isShowcase && listing.eligibility.reasons.length ? (
                   <ul className="reason-list">{listing.eligibility.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
                 ) : null}
               </section>
 
-              <section className="detail-section">
+              {!isShowcase ? <section className="detail-section">
                 <div className="section-title-row"><div><div className="section-kicker">Exact requirements</div><h3>Available unit bands</h3></div><span>{listing.units} lottery units</span></div>
                 <div className="offer-list">
                   {listing.offers.map((offer) => (
                     <OfferRow key={offer.id} offer={offer} matched={listing.matchedOfferIds.includes(offer.id)} householdSize={householdSize} />
                   ))}
                 </div>
-              </section>
+              </section> : null}
 
-              <section className="detail-section two-column-detail">
+              {!isShowcase ? <section className="detail-section two-column-detail">
                 <div>
                   <div className="section-kicker">Amenities</div>
                   <h3>What the development lists</h3>
@@ -306,7 +345,7 @@ function DetailPanel({
                     ))}
                   </ul>
                 </div>
-              </section>
+              </section> : null}
 
               <section className="detail-section">
                 <div className="section-title-row">
@@ -332,13 +371,13 @@ function DetailPanel({
               </section>
 
               <section className="detail-section">
-                <div className="section-title-row"><div><div className="section-kicker">Inspector-confirmed record</div><h3>Open HPD violations</h3></div><span>{listing.violations.length} current</span></div>
+                <div className="section-title-row"><div><div className="section-kicker">Inspector-confirmed record</div><h3>Open HPD violations</h3></div><span>{isShowcase ? `${listing.violations.length} representative samples` : `${listing.violations.length} current`}</span></div>
                 {visibleViolations.length ? (
                   <div className="violation-list">
                     {visibleViolations.map((violation, index) => (
                       <article className="violation-row" key={`${violation.id}-${index}`}>
                         <span className={`class-badge class-${violation.class.toLowerCase()}`}>Class {violation.class}</span>
-                        <div><p>{violation.description || "Description unavailable"}</p><span>{formatDate(violation.inspectionDate)}{violation.floor ? ` · floor ${violation.floor}` : ""}{violation.apartment ? ` · apt ${violation.apartment}` : ""}{violation.rentImpairing ? " · rent impairing" : ""}</span></div>
+                        <div><p>{violation.description || "Description unavailable"}</p><span>{isShowcase ? violation.status : formatDate(violation.inspectionDate)}{violation.floor ? ` · floor ${violation.floor}` : ""}{violation.apartment ? ` · apt ${violation.apartment}` : ""}{violation.rentImpairing ? " · rent impairing" : ""}</span></div>
                       </article>
                     ))}
                     {listing.violations.length > visibleViolations.length ? <p className="muted-copy">Showing the 30 highest-severity records.</p> : null}
@@ -356,19 +395,32 @@ function DetailPanel({
 
               <section className="detail-section action-grid">
                 <div className="precheck-card">
-                  <div className="section-kicker">Shopify Precheck kit</div>
-                  <h3>{listing.precheck.total == null ? "Live pricing unavailable" : `${formatMoney(listing.precheck.total)} one time`}</h3>
-                  {!listing.precheck.categories.length ? <p>No safe renter-scale mitigation is tied to the current open record.</p> : null}
+                  <div className="section-kicker">Shopify violation Precheck + optional move-in fit</div>
+                  <h3>{listing.precheck.total == null ? "Violation-kit pricing unavailable" : `${formatMoney(listing.precheck.total)} one time for violation mitigations`}</h3>
+                  <p>Violation-backed mitigations determine the Precheck total. Optional fit items use public building facts, nearby transit, and carefully limited development-photo cues and are priced separately.</p>
+                  {!listing.precheck.categories.length ? <p>No safe renter-scale or apartment-fit item was identified.</p> : null}
                   {listing.precheck.items.map((item) => (
                     <div className="kit-item" key={item.category}>
                       <div className="kit-thumb">
-                        {item.product?.image && safeImageSource(item.product.image) ? <Image src={item.product.image} alt="" fill sizes="56px" /> : null}
+                        {item.product?.image && isDisplayImageSource(item.product.image) ? <Image src={item.product.image} alt="" fill sizes="56px" /> : null}
                       </div>
-                      <div><strong>{item.product?.title ?? item.label}</strong><span>{item.reason}</span>{item.supplemental ? <em>Supplemental only</em> : null}</div>
+                      <div>
+                        <strong>{item.product?.title ?? item.label}</strong>
+                        <span>{item.reason}</span>
+                        <em className={`kit-basis basis-${item.basis}`}>{PRECHECK_BASIS_LABEL[item.basis]}</em>
+                        {item.supplemental ? <em>Supplemental only</em> : null}
+                      </div>
                       <div className="kit-price">{item.product ? formatMoney(item.product.price) : "—"}</div>
                     </div>
                   ))}
-                  <p className="fine-print">Products mitigate limited renter-scale symptoms. They do not replace owner repairs or official safety guidance.</p>
+                  {optionalItems.length ? (
+                    <p className="fine-print">
+                      Optional move-in extras: {optionalTotal > 0 ? formatMoney(optionalTotal) : "no live prices"}
+                      {optionalComplete ? " priced separately." : " priced separately; some live prices are unavailable."}
+                    </p>
+                  ) : null}
+                  {listing.precheck.photoAnalysisStatus === "unavailable" ? <p className="fine-print">Development-photo analysis was unavailable; no image-based recommendation was assumed.</p> : null}
+                  <p className="fine-print">Photo cues come from development marketing images and may not depict the exact unit. Confirm fit and dimensions. Products never replace owner repairs or official safety guidance.</p>
                 </div>
                 <div className="redflag-card">
                   <div className="section-kicker">Landlord-action red flags</div>
@@ -377,8 +429,8 @@ function DetailPanel({
                 </div>
               </section>
 
-              <a className="apply-button" href={listing.applyUrl} target="_blank" rel="noreferrer">Apply on Housing Connect <span>↗</span></a>
-              <p className="official-note">Super checks public records and eligibility bands. Applications and final determinations stay with NYC Housing Connect.</p>
+              {!isShowcase ? <a className="apply-button" href={listing.applyUrl} target="_blank" rel="noreferrer">Apply on Housing Connect <span>↗</span></a> : null}
+              <p className="official-note">{isShowcase ? "Recorded public-data case study. It demonstrates Super's analysis and is not an available apartment." : "Super checks public records and eligibility bands. Applications and final determinations stay with NYC Housing Connect."}</p>
             </div>
           </>
         ) : null}
@@ -397,18 +449,27 @@ export default function Marketplace() {
   const [partial, setPartial] = useState<MarketplaceListing[]>([]);
   const [exact, setExact] = useState<MarketplaceListing[]>([]);
   const [near, setNear] = useState<MarketplaceListing[]>([]);
+  const [showcase, setShowcase] = useState<MarketplaceListing | null>(null);
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MarketplaceListing | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const abort = useRef<AbortController | null>(null);
+  const detailAbort = useRef<AbortController | null>(null);
+  const detailRequest = useRef(0);
   const initialDeepLinkHandled = useRef(false);
 
   const allListings = useMemo(() => {
     const source = exact.length || near.length ? [...exact, ...near] : partial;
     return unique(source.map((listing) => listing.id)).map((id) => source.find((listing) => listing.id === id)!);
   }, [exact, near, partial]);
+
+  const precheckSpotlight = phase === "searching"
+    ? null
+    : allListings.find((listing) => listing.spotlight === "precheck") ?? showcase;
+  const visibleExact = exact.filter((listing) => listing.id !== precheckSpotlight?.id);
+  const visibleNear = near.filter((listing) => listing.id !== precheckSpotlight?.id);
 
   const markers = useMemo<CityResultMarker[]>(
     () =>
@@ -453,7 +514,8 @@ export default function Marketplace() {
     } else if (event.stage === "results") {
       setExact(event.exact);
       setNear(event.near);
-      setCheck("pricing", "Safe Precheck categories priced through Shopify", "done");
+      setShowcase(event.showcase ?? null);
+      setCheck("pricing", "Violation and apartment-fit items checked against Shopify", "done");
     } else if (event.stage === "done") {
       setPhase("done");
     } else if (event.stage === "error") {
@@ -474,6 +536,8 @@ export default function Marketplace() {
       return;
     }
     abort.current?.abort();
+    detailAbort.current?.abort();
+    detailRequest.current += 1;
     const controller = new AbortController();
     abort.current = controller;
     setPhase("searching");
@@ -482,6 +546,7 @@ export default function Marketplace() {
     setPartial([]);
     setExact([]);
     setNear([]);
+    setShowcase(null);
     setError("");
     setSelectedId(null);
     setDetail(null);
@@ -502,6 +567,7 @@ export default function Marketplace() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let sawTerminalEvent = false;
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -510,9 +576,14 @@ export default function Marketplace() {
         buffer = frames.pop() ?? "";
         for (const frame of frames) {
           const line = frame.split(/\r?\n/).find((item) => item.startsWith("data:"));
-          if (line) applyEvent(JSON.parse(line.slice(5).trim()) as MarketplaceEvent);
+          if (line) {
+            const marketEvent = JSON.parse(line.slice(5).trim()) as MarketplaceEvent;
+            if (marketEvent.stage === "done" || marketEvent.stage === "error") sawTerminalEvent = true;
+            applyEvent(marketEvent);
+          }
         }
       }
+      if (!sawTerminalEvent) throw new Error("Search ended before Super finished checking the results.");
     } catch (reason: any) {
       if (reason?.name === "AbortError") return;
       setError(reason?.message ?? "Search failed");
@@ -522,32 +593,46 @@ export default function Marketplace() {
 
   const openListing = useCallback(
     async (id: string, updateUrl = true) => {
+      detailAbort.current?.abort();
+      const controller = new AbortController();
+      detailAbort.current = controller;
+      const requestNumber = detailRequest.current + 1;
+      detailRequest.current = requestNumber;
       if (updateUrl) replaceListingQuery(id);
       setSelectedId(id);
-      setDetail(allListings.find((listing) => listing.id === id) ?? null);
+      setDetail(allListings.find((listing) => listing.id === id) ?? (showcase?.id === id ? showcase : null));
       setDetailLoading(true);
       setDetailError("");
       const params = new URLSearchParams({ id, brief, householdSize, annualIncome });
       try {
-        const response = await fetch(`/api/marketplace/listing?${params}`);
+        const response = await fetch(`/api/marketplace/listing?${params}`, { signal: controller.signal });
         const body = await response.json();
         if (!response.ok) throw new Error(body?.error ?? "Listing details unavailable");
+        if (detailRequest.current !== requestNumber) return;
         setDetail(body);
       } catch (reason: any) {
+        if (reason?.name === "AbortError" || detailRequest.current !== requestNumber) return;
         setDetailError(reason?.message ?? "Listing details unavailable");
       } finally {
-        setDetailLoading(false);
+        if (detailRequest.current === requestNumber) setDetailLoading(false);
       }
     },
-    [allListings, annualIncome, brief, householdSize]
+    [allListings, annualIncome, brief, householdSize, showcase]
   );
 
   const closeListing = useCallback(() => {
+    detailAbort.current?.abort();
+    detailRequest.current += 1;
     setSelectedId(null);
     setDetail(null);
     setDetailError("");
     setDetailLoading(false);
     replaceListingQuery(null);
+  }, []);
+
+  useEffect(() => () => {
+    abort.current?.abort();
+    detailAbort.current?.abort();
   }, []);
 
   useEffect(() => {
@@ -631,10 +716,28 @@ export default function Marketplace() {
                 <div><p className="eyebrow">Live matches</p><h2>{phase === "searching" ? `${allListings.length} buildings checked so far` : exact.length ? `${exact.length} exact match${exact.length === 1 ? "" : "es"}` : "No exact match yet"}</h2></div>
                 <span>{exact.length + near.length || partial.length} shown · up to 8 inspected</span>
               </div>
-              {exact.map((listing, index) => <ListingCard key={listing.id} listing={listing} selected={selectedId === listing.id} onOpen={() => openListing(listing.id)} priority={index < 2} />)}
+              {precheckSpotlight ? (
+                <section className="precheck-spotlight" aria-label="Precheck spotlight">
+                  <div className="spotlight-heading">
+                    <div><p className="eyebrow">{precheckSpotlight.source === "showcase" ? "Recorded Precheck case" : "Precheck spotlight"}</p><h3>Why the Shopify layer matters</h3></div>
+                    <p>
+                      {precheckSpotlight.source === "showcase"
+                        ? "Not an active rental or a safety recommendation. This recorded public-data case keeps the commerce workflow demonstrable:"
+                        : "Not a safety recommendation. Super retained this building because its real HPD record produced a renter-scale kit:"}
+                      {` ${precheckSpotlight.precheck.categories.map((category) => category.label).join(" · ")}.`}
+                    </p>
+                  </div>
+                  {precheckSpotlight.source === "showcase" ? (
+                    <RecordedShowcaseCard listing={precheckSpotlight} selected={selectedId === precheckSpotlight.id} onOpen={() => openListing(precheckSpotlight.id)} />
+                  ) : (
+                    <ListingCard listing={precheckSpotlight} selected={selectedId === precheckSpotlight.id} onOpen={() => openListing(precheckSpotlight.id)} priority />
+                  )}
+                </section>
+              ) : null}
+              {visibleExact.map((listing, index) => <ListingCard key={listing.id} listing={listing} selected={selectedId === listing.id} onOpen={() => openListing(listing.id)} priority={index < 2 && !precheckSpotlight} />)}
               {phase === "searching" && !exact.length ? partial.map((listing, index) => <ListingCard key={listing.id} listing={listing} selected={selectedId === listing.id} onOpen={() => openListing(listing.id)} priority={index < 2} />) : null}
-              {phase !== "searching" && near.length ? <div className="near-heading"><strong>Near matches</strong><span>Not eligible as entered · reason shown on every card</span></div> : null}
-              {phase !== "searching" ? near.map((listing) => <ListingCard key={listing.id} listing={listing} selected={selectedId === listing.id} onOpen={() => openListing(listing.id)} />) : null}
+              {phase !== "searching" && visibleNear.length ? <div className="near-heading"><strong>Near matches</strong><span>Not eligible as entered · reason shown on every card</span></div> : null}
+              {phase !== "searching" ? visibleNear.map((listing) => <ListingCard key={listing.id} listing={listing} selected={selectedId === listing.id} onOpen={() => openListing(listing.id)} />) : null}
               {phase === "done" && !exact.length && !near.length ? <div className="no-results"><h3>No active listing had enough data to verify a match.</h3><p>Try a broader borough or a higher rent ceiling. Super will keep your income and household boundaries exact.</p></div> : null}
             </>
           )}

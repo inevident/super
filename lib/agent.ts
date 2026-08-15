@@ -10,6 +10,7 @@
 import type { AgentStep, BuildingProfile, Need, Pick, Product } from "./types";
 import { searchCatalog, pickBest, rentable } from "./ucp";
 import { inferNeeds } from "./needs";
+import { productMatchesPrecheck } from "./precheck";
 
 export const TOOLS = [
   {
@@ -60,17 +61,65 @@ export type ToolDefinition = {
 export type ModelClient = (
   messages: any[],
   system: string,
-  opts?: { forceTool?: string }
+  opts?: {
+    forceTool?: string;
+    requireTool?: boolean;
+    deadlineMs?: number;
+    perModelTimeoutMs?: number;
+    signal?: AbortSignal;
+  }
 ) => Promise<{ stop_reason: string; content: any[] }>;
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+function abortError() {
+  const error = new Error("Request aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  externalSignal?: AbortSignal
+) {
   const controller = new AbortController();
+  const abort = () => controller.abort(externalSignal?.reason);
+  externalSignal?.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", abort);
   }
+}
+
+function compactString(value: unknown, maximum = 180) {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, maximum) : "";
+}
+
+function precheckCategoryForLabel(label: string) {
+  if (/\b(?:space|ceramic)?\s*heater\b|\bheat\b/i.test(label)) return "heat" as const;
+  if (/\bdehumidifier\b|\bmold\b/i.test(label)) return "mold" as const;
+  if (/\b(?:trap|vermin|mouse|mice|rat|roach|bed[\s-]?bug)\b/i.test(label)) return "vermin" as const;
+  if (/\b(?:leak detector|water sensor|leak alarm)\b/i.test(label)) return "leaks" as const;
+  if (/\b(?:true\s+hepa|air purifier|lead)\b/i.test(label)) return "lead-dust" as const;
+  return null;
+}
+
+function recordedReason(profile: BuildingProfile, label: string) {
+  const category = precheckCategoryForLabel(label);
+  const signal = profile.signals.find((item) => {
+    if (category === "heat") return item.kind === "heat";
+    if (category === "mold") return item.kind === "mold";
+    if (category === "vermin") return item.kind === "vermin";
+    if (category === "leaks") return item.kind === "leak";
+    if (category === "lead-dust") return item.kind === "lead paint";
+    return false;
+  });
+  return signal
+    ? `${signal.count} recorded open ${signal.kind} signal${signal.count === 1 ? "" : "s"}.`
+    : null;
 }
 
 function systemPrompt() {
@@ -162,7 +211,7 @@ export async function runAgent(
       res = await callModel(
         messages,
         systemPrompt(),
-        forceNext ? { forceTool: "add_to_cart" } : undefined
+        forceNext ? { forceTool: "add_to_cart", requireTool: true } : undefined
       );
     } catch (e: any) {
       // A rate limit partway through must not discard what the agent already
@@ -205,16 +254,30 @@ export async function runAgent(
       const { name, input, id } = use;
 
       if (name === "search_products") {
+        const query = compactString(input?.query);
+        const requestedMaximum = Number(input?.max_price);
+        const maxPrice = Number.isFinite(requestedMaximum)
+          ? Math.min(150, Math.max(5, requestedMaximum))
+          : null;
+        if (!query) {
+          results.push({
+            type: "tool_result",
+            tool_use_id: id,
+            content: "query must be a non-empty string",
+            is_error: true,
+          });
+          continue;
+        }
         searches++;
         onStep({
           type: "tool",
           name: "search_products",
-          input: input.max_price ? `${input.query} · under $${input.max_price}` : input.query,
+          input: maxPrice ? `${query} · under $${maxPrice}` : query,
         });
-        let products = await searchCatalog(input.query, profile.address.zip).catch(() => []);
+        let products = await searchCatalog(query, profile.address.zip).catch(() => []);
         // Never offer the agent something the tenant cannot legally install.
         products = rentable(products);
-        if (input.max_price) products = products.filter((p) => p.price <= input.max_price);
+        if (maxPrice) products = products.filter((p) => p.price <= maxPrice);
         products = products.slice(0, 6);
         products.forEach((p) => seen.set(p.url, p));
 
@@ -242,7 +305,17 @@ export async function runAgent(
           ),
         });
       } else if (name === "add_to_cart") {
-        const product = seen.get(input.product_url) ?? null;
+        const productUrl = compactString(input?.product_url, 1_000);
+        const label = compactString(input?.label, 60);
+        const urgency = ["high", "medium", "low"].includes(input?.urgency)
+          ? input.urgency as Need["urgency"]
+          : "medium";
+        const category = precheckCategoryForLabel(label);
+        const reason = recordedReason(profile, label);
+        const candidate = seen.get(productUrl) ?? null;
+        const product = candidate && category && reason && productMatchesPrecheck(category, candidate.title, label)
+          ? candidate
+          : null;
         // Reject re-adding the same product under a different label. Without this
         // the agent will reuse a url for a need it never searched for, producing
         // entries like "space heater — Small Snap Traps for Mice".
@@ -253,26 +326,26 @@ export async function runAgent(
         if (product && !duplicate) {
           cart.push({
             need: {
-              label: input.label,
-              query: input.label,
-              reason: input.reason,
-              urgency: input.urgency ?? "medium",
+              label,
+              query: label,
+              reason: reason!,
+              urgency,
             },
             product,
           });
           onStep({
             type: "result",
             name: "add_to_cart",
-            summary: `${input.label} — ${product.title.slice(0, 40)} $${product.price.toFixed(2)}`,
+            summary: `${label} — ${product.title.slice(0, 40)} $${product.price.toFixed(2)}`,
           });
         }
         results.push({
           type: "tool_result",
           tool_use_id: id,
           content: !product
-            ? "unknown product_url; search first"
-            : duplicate
-              ? `already in the cart. Search for "${input.label}" and add a result from that search.`
+              ? "unknown or category-mismatched product_url; search for this exact need first"
+              : duplicate
+              ? `already in the cart. Search for "${label}" and add a result from that search.`
               : "added",
           is_error: !product || duplicate,
         });
@@ -310,18 +383,92 @@ export async function runAgent(
 // returned 429 while these five answered tool calls fine. So the client walks a
 // list and sticks to the first model that works, instead of dying on the
 // preferred one being busy.
-// Order matters. Verified by direct probe: nemotron and cohere honour a forced
-// tool_choice, which is what makes the agent commit to a cart instead of
-// narrating about it. gemma often narrates, and gpt-oss-20b 400s on tool_choice
-// entirely, so they sit lower.
+// Order matters. GPT-OSS is the immediate Gemma failover requested for the
+// hackathon. OpenRouter's GPT-OSS route does not consistently accept a forced
+// tool_choice, so the request builder removes only that field for GPT-OSS while
+// preserving the tool definitions and explicit system instruction.
+export const PRIMARY_OPENROUTER_MODEL = "google/gemma-4-31b-it:free";
+export const RATE_LIMIT_FALLBACK_MODEL = "openai/gpt-oss-20b:free";
 export const FREE_MODELS = [
-  "google/gemma-4-31b-it:free",
+  PRIMARY_OPENROUTER_MODEL,
+  RATE_LIMIT_FALLBACK_MODEL,
   "nvidia/nemotron-3.5-lightning:free",
   "nvidia/nemotron-3-super-120b-a12b:free",
   "cohere/north-mini-code:free",
   "nvidia/nemotron-3-nano-30b-a3b:free",
   "google/gemma-4-26b-a4b-it:free",
 ];
+
+export function configuredOpenRouterModels(preferred?: string) {
+  if (!preferred) return [...FREE_MODELS];
+  return [
+    preferred,
+    ...(preferred.includes("gemma-4-31b") && preferred !== RATE_LIMIT_FALLBACK_MODEL
+      ? [RATE_LIMIT_FALLBACK_MODEL]
+      : []),
+  ];
+}
+
+function valueMatchesSchema(value: unknown, schema: any): boolean {
+  if (!schema || typeof schema !== "object") return true;
+  if (Array.isArray(schema.enum) && !schema.enum.includes(value)) return false;
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type].filter(Boolean);
+  if (types.length) {
+    const matchesType = types.some((type: unknown) => {
+      if (type === "null") return value === null;
+      if (type === "array") return Array.isArray(value);
+      if (type === "object") return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+      if (type === "number") return typeof value === "number" && Number.isFinite(value);
+      if (type === "integer") return typeof value === "number" && Number.isInteger(value);
+      return typeof value === type;
+    });
+    if (!matchesType) return false;
+  }
+  if (Array.isArray(value)) {
+    if (Number.isFinite(schema.maxItems) && value.length > schema.maxItems) return false;
+    return !schema.items || value.every((item) => valueMatchesSchema(item, schema.items));
+  }
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    if (Array.isArray(schema.required) && schema.required.some((key: string) => !(key in object))) {
+      return false;
+    }
+    const properties = schema.properties ?? {};
+    return Object.entries(properties).every(([key, child]) =>
+      !(key in object) || valueMatchesSchema(object[key], child)
+    );
+  }
+  return true;
+}
+
+function validToolCalls(rawCalls: unknown, tools: readonly ToolDefinition[]) {
+  const definitions = new Map(tools.map((tool) => [tool.name, tool]));
+  const calls: any[] = [];
+  let dropped = 0;
+  for (const raw of Array.isArray(rawCalls) ? rawCalls : []) {
+    const name = compactString(raw?.function?.name, 100);
+    const id = compactString(raw?.id, 200);
+    const definition = definitions.get(name);
+    let input: unknown;
+    try {
+      input = JSON.parse(raw?.function?.arguments || "{}");
+    } catch {
+      dropped += 1;
+      continue;
+    }
+    if (!id || !definition || !valueMatchesSchema(input, definition.input_schema)) {
+      dropped += 1;
+      continue;
+    }
+    calls.push({ type: "tool_use", id, name, input });
+  }
+  return { calls, dropped };
+}
+
+function retryableOpenRouterFailure(status: number, code: unknown) {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500 ||
+    /rate|timeout|overload|provider/i.test(String(code ?? ""));
+}
 
 export function openrouterClient(
   apiKey: string,
@@ -357,6 +504,21 @@ export function openrouterClient(
         });
         continue;
       }
+      if (m.role === "user" && Array.isArray(m.content)) {
+        const blocks = m.content.flatMap((block: any) => {
+          if (block?.type === "text" && block.text) {
+            return [{ type: "text", text: String(block.text) }];
+          }
+          if (block?.type === "image_url" && /^https:\/\//.test(String(block.image_url?.url ?? ""))) {
+            return [{ type: "image_url", image_url: { url: String(block.image_url.url) } }];
+          }
+          return [];
+        });
+        if (blocks.length) {
+          out.push({ role: "user", content: blocks });
+          continue;
+        }
+      }
       // Tool results become one `tool` message each.
       for (const b of m.content) {
         if (b.type === "tool_result") {
@@ -390,13 +552,19 @@ export function openrouterClient(
     const order = pinned ? [pinned, ...models.filter((m) => m !== pinned)] : models;
     const failures: string[] = [];
     let d: any = null;
-    const deadline = Date.now() + 30_000;
+    let selectedToolCalls: any[] = [];
+    let selectedDropped = 0;
+    const deadline = Date.now() + (opts?.deadlineMs ?? 30_000);
 
     for (const candidate of order) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
       let res: Response;
       try {
+        const candidateBody = { ...body };
+        if (candidate.includes("gpt-oss") && candidateBody.tool_choice) {
+          delete candidateBody.tool_choice;
+        }
         res = await fetchWithTimeout(
           "https://openrouter.ai/api/v1/chat/completions",
           {
@@ -407,25 +575,42 @@ export function openrouterClient(
               "HTTP-Referer": "https://super.local",
               "X-Title": "Super",
             },
-            body: JSON.stringify({ model: candidate, ...body }),
+            body: JSON.stringify({ model: candidate, ...candidateBody }),
           },
-          Math.min(12_000, remaining)
+          Math.min(opts?.perModelTimeoutMs ?? 12_000, remaining),
+          opts?.signal
         );
       } catch {
+        if (opts?.signal?.aborted) throw abortError();
         failures.push(`${candidate} (timeout/network)`);
         continue;
       }
 
-      const parsed = res.ok ? await res.json().catch(() => null) : null;
+      const parsed = await res.json().catch(() => null);
 
       if (!res.ok || parsed?.error || !parsed?.choices?.[0]?.message) {
         const why = parsed?.error?.code ?? res.status;
         failures.push(`${candidate} (${why})`);
+        if (retryableOpenRouterFailure(res.status, why)) continue;
+        throw new Error(`OpenRouter request rejected (${res.status || why})`);
+      }
+
+      const validated = validToolCalls(parsed.choices[0].message.tool_calls, tools);
+
+      if (
+        opts?.requireTool &&
+        !validated.calls.some(
+          (call: any) => !opts.forceTool || call.name === opts.forceTool
+        )
+      ) {
+        failures.push(`${candidate} (required tool not called)`);
         continue;
       }
 
       pinned = candidate;
       d = parsed;
+      selectedToolCalls = validated.calls;
+      selectedDropped = validated.dropped;
       break;
     }
 
@@ -436,26 +621,16 @@ export function openrouterClient(
     const content: any[] = [];
     if (msg.content) content.push({ type: "text", text: msg.content });
 
-    let dropped = 0;
-    for (const c of msg.tool_calls ?? []) {
-      let input: any = {};
-      try {
-        input = JSON.parse(c.function.arguments || "{}");
-      } catch {
-        dropped++;
-        continue;
-      }
-      content.push({ type: "tool_use", id: c.id, name: c.function.name, input });
-    }
+    content.push(...selectedToolCalls);
 
     const finish = d.choices[0].finish_reason;
 
     // Never fail silently here: a dropped call or a truncated response is the
     // difference between the agent committing and appearing to stall.
-    if (dropped || finish === "length") {
+    if (selectedDropped || finish === "length") {
       content.push({
         type: "text",
-        text: `[${pinned}: ${dropped} malformed tool call(s)${finish === "length" ? ", response hit the token limit" : ""}]`,
+        text: `[${pinned}: ${selectedDropped} malformed tool call(s)${finish === "length" ? ", response hit the token limit" : ""}]`,
       });
     }
     return {
@@ -490,7 +665,8 @@ export function anthropicClient(
           messages,
         }),
       },
-      25_000
+      25_000,
+      opts?.signal
     );
     if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
     const d = await res.json();
@@ -504,9 +680,11 @@ export function anthropicClient(
 export function selectModel(tools: readonly ToolDefinition[] = TOOLS): ModelClient | null {
   const or = process.env.OPENROUTER_API_KEY;
   if (or) {
-    // SUPER_MODEL pins one model; otherwise walk the free list until one answers.
+    // A Gemma override still retains GPT-OSS as its immediate failover. Other
+    // explicit model overrides remain pinned as requested.
     const preferred = process.env.SUPER_MODEL;
-    return openrouterClient(or, preferred ? [preferred] : FREE_MODELS, tools);
+    const models = configuredOpenRouterModels(preferred);
+    return openrouterClient(or, models, tools);
   }
   const anthropic = process.env.ANTHROPIC_API_KEY;
   if (anthropic) return anthropicClient(anthropic, tools);

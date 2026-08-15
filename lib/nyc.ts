@@ -51,8 +51,20 @@ export type HousingConnectBuildingRow = {
 const assessmentCache = new Map<string, { expires: number; value: BuildingAssessment }>();
 const buildingJoinCache = new Map<string, { expires: number; value: HousingConnectBuildingRow[] }>();
 
-async function fetchJson(url: string, timeoutMs = 6_000): Promise<any> {
+function abortError() {
+  const error = new Error("Request aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw abortError();
+}
+
+async function fetchJson(url: string, timeoutMs = 6_000, externalSignal?: AbortSignal): Promise<any> {
   const controller = new AbortController();
+  const abort = () => controller.abort(externalSignal?.reason);
+  externalSignal?.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { cache: "no-store", signal: controller.signal });
@@ -60,6 +72,7 @@ async function fetchJson(url: string, timeoutMs = 6_000): Promise<any> {
     return await response.json();
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", abort);
   }
 }
 
@@ -76,8 +89,9 @@ export async function suggestAddresses(text: string): Promise<string[]> {
   }
 }
 
-export async function resolveAddress(text: string): Promise<Address> {
-  const data = await fetchJson(`${GEOSEARCH}/search?text=${encodeURIComponent(text)}`, 5_000);
+export async function resolveAddress(text: string, signal?: AbortSignal): Promise<Address> {
+  throwIfAborted(signal);
+  const data = await fetchJson(`${GEOSEARCH}/search?text=${encodeURIComponent(text)}`, 5_000, signal);
   const feature = data.features?.find((item: any) => item.properties?.addendum?.pad?.bbl);
   if (!feature) throw new Error(`No NYC building found for "${text}"`);
   return {
@@ -89,7 +103,8 @@ export async function resolveAddress(text: string): Promise<Address> {
   };
 }
 
-export async function fetchHousingConnectBuildings(lotteryId: string | number) {
+export async function fetchHousingConnectBuildings(lotteryId: string | number, signal?: AbortSignal) {
+  throwIfAborted(signal);
   const key = String(lotteryId);
   const cached = buildingJoinCache.get(key);
   if (cached && cached.expires > Date.now()) return cached.value;
@@ -100,15 +115,17 @@ export async function fetchHousingConnectBuildings(lotteryId: string | number) {
       $select:
         "lottery_id,hc_building_id,hpd_building_id,house_number,street_name,borough,address_zipcode,address_latitude,address_longitude,address_buildingidentificationnumber,address_bbl",
     });
-    const rows = (await fetchJson(`${SODA}/nibs-na6y.json?${params}`)) as HousingConnectBuildingRow[];
+    const rows = (await fetchJson(`${SODA}/nibs-na6y.json?${params}`, 6_000, signal)) as HousingConnectBuildingRow[];
     buildingJoinCache.set(key, { expires: Date.now() + 30 * 60_000, value: rows });
     return rows;
   } catch {
+    throwIfAborted(signal);
     return [];
   }
 }
 
-export async function fetchFacts(bbl: string): Promise<BuildingFacts | null> {
+export async function fetchFacts(bbl: string, signal?: AbortSignal): Promise<BuildingFacts | null> {
+  throwIfAborted(signal);
   if (!bbl) return null;
   try {
     const params = new URLSearchParams({
@@ -116,7 +133,7 @@ export async function fetchFacts(bbl: string): Promise<BuildingFacts | null> {
       $limit: "1",
       $select: "numfloors,yearbuilt,unitsres,bldgarea,bldgclass",
     });
-    const [row] = await fetchJson(`${SODA}/64uk-42ks.json?${params}`);
+    const [row] = await fetchJson(`${SODA}/64uk-42ks.json?${params}`, 6_000, signal);
     if (!row) return null;
     const floors = Math.round(Number(row.numfloors) || 0);
     const units = Number(row.unitsres) || 0;
@@ -137,11 +154,13 @@ export async function fetchFacts(bbl: string): Promise<BuildingFacts | null> {
       likelyLeadPaint: yearBuilt > 0 && yearBuilt < 1978,
     };
   } catch {
+    throwIfAborted(signal);
     return null;
   }
 }
 
-export async function fetchFootprint(bin: string): Promise<Footprint | null> {
+export async function fetchFootprint(bin: string, signal?: AbortSignal): Promise<Footprint | null> {
+  throwIfAborted(signal);
   if (!bin) return null;
   try {
     const params = new URLSearchParams({
@@ -149,7 +168,7 @@ export async function fetchFootprint(bin: string): Promise<Footprint | null> {
       $limit: "1",
       $select: "the_geom,height_roof,ground_elevation",
     });
-    const [row] = await fetchJson(`${SODA}/5zhs-2jue.json?${params}`);
+    const [row] = await fetchJson(`${SODA}/5zhs-2jue.json?${params}`, 6_000, signal);
     const geometry = row?.the_geom;
     if (!geometry?.coordinates) return null;
     const ring =
@@ -161,11 +180,13 @@ export async function fetchFootprint(bin: string): Promise<Footprint | null> {
       groundElevation: Number(row.ground_elevation) || 0,
     };
   } catch {
+    throwIfAborted(signal);
     return null;
   }
 }
 
-async function fetch311(zip: string) {
+async function fetch311(zip: string, signal?: AbortSignal) {
+  throwIfAborted(signal);
   if (!zip) return [];
   try {
     const since = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
@@ -176,14 +197,16 @@ async function fetch311(zip: string) {
       $order: "n DESC",
       $limit: "6",
     });
-    const rows = await fetchJson(`${SODA}/erm2-nwe9.json?${params}`);
+    const rows = await fetchJson(`${SODA}/erm2-nwe9.json?${params}`, 6_000, signal);
     return rows.map((row: any) => ({ complaint: row.complaint_type, count: Number(row.n) }));
   } catch {
+    throwIfAborted(signal);
     return [];
   }
 }
 
-export async function fetchComplaints(bbl: string): Promise<TenantComplaints | null> {
+export async function fetchComplaints(bbl: string, signal?: AbortSignal): Promise<TenantComplaints | null> {
+  throwIfAborted(signal);
   if (!bbl) return null;
   try {
     const where = `bbl='${bbl.replace(/'/g, "")}'`;
@@ -199,8 +222,8 @@ export async function fetchComplaints(bbl: string): Promise<TenantComplaints | n
       $select: "count(problem_id) AS n,min(received_date) AS first,max(received_date) AS last",
     });
     const [byCategory, totals] = await Promise.all([
-      fetchJson(`${SODA}/ygpa-z7cr.json?${categoryParams}`),
-      fetchJson(`${SODA}/ygpa-z7cr.json?${totalParams}`),
+      fetchJson(`${SODA}/ygpa-z7cr.json?${categoryParams}`, 6_000, signal),
+      fetchJson(`${SODA}/ygpa-z7cr.json?${totalParams}`, 6_000, signal),
     ]);
     const total = Number(totals?.[0]?.n) || 0;
     if (!total) return null;
@@ -214,11 +237,13 @@ export async function fetchComplaints(bbl: string): Promise<TenantComplaints | n
         .map((row: any) => ({ category: String(row.major_category), count: Number(row.n) })),
     };
   } catch {
+    throwIfAborted(signal);
     return null;
   }
 }
 
-async function fetchOpenViolationRows(bbl: string) {
+async function fetchOpenViolationRows(bbl: string, signal?: AbortSignal) {
+  throwIfAborted(signal);
   const rows: ViolationRow[] = [];
   try {
     for (let page = 0; page < MAX_PAGES; page++) {
@@ -231,22 +256,25 @@ async function fetchOpenViolationRows(bbl: string) {
           "violationid,class,inspectiondate,currentstatus,currentstatusdate,novdescription,apartment,story,rentimpairing,violationstatus,bbl,bin",
         $order: "inspectiondate DESC",
       });
-      const batch = (await fetchJson(`${SODA}/wvxf-dwi5.json?${params}`, 8_000)) as ViolationRow[];
+      const batch = (await fetchJson(`${SODA}/wvxf-dwi5.json?${params}`, 8_000, signal)) as ViolationRow[];
       rows.push(...batch);
       if (batch.length < PAGE) return { rows, available: true, truncated: false };
     }
     return { rows, available: true, truncated: true };
   } catch {
+    throwIfAborted(signal);
     return { rows: [], available: false, truncated: false };
   }
 }
 
-async function fetchTotalViolationCount(bbl: string) {
+async function fetchTotalViolationCount(bbl: string, signal?: AbortSignal) {
+  throwIfAborted(signal);
   try {
     const params = new URLSearchParams({ bbl, $select: "count(violationid) AS n" });
-    const rows = await fetchJson(`${SODA}/wvxf-dwi5.json?${params}`);
+    const rows = await fetchJson(`${SODA}/wvxf-dwi5.json?${params}`, 6_000, signal);
     return Number(rows?.[0]?.n) || 0;
   } catch {
+    throwIfAborted(signal);
     return null;
   }
 }
@@ -398,7 +426,8 @@ const THEMES: { kind: string; pattern: RegExp }[] = [
   { kind: "vermin", pattern: /ROACH|MICE|\bRATS?\b|VERMIN|BEDBUG/i },
   { kind: "mold", pattern: /MOLD|MILDEW|DAMP/i },
   { kind: "leak", pattern: /LEAK|WATER DAMAGE|SEEPAGE/i },
-  { kind: "lead paint", pattern: /\bLEAD\b|PAINT|PLASTER/i },
+  { kind: "lead paint", pattern: /\bLEAD(?:-BASED)?\b/i },
+  { kind: "paint/plaster", pattern: /PAINT|PLASTER/i },
   { kind: "smoke alarm", pattern: /SMOKE DETECT|CARBON MONOXIDE|FIRE ALARM/i },
   { kind: "window guards", pattern: /WINDOW GUARD/i },
   { kind: "lighting", pattern: /ADEQUATE LIGHT|ILLUMINATION/i },
@@ -413,14 +442,15 @@ function buildSignals(records: ViolationRecord[]): Signal[] {
   }).sort((a, b) => b.count - a.count);
 }
 
-async function buildAssessment(address: Address): Promise<BuildingAssessment> {
+async function buildAssessment(address: Address, signal?: AbortSignal): Promise<BuildingAssessment> {
+  throwIfAborted(signal);
   const [violationResult, totalCount, neighborhood, facts, footprint, complaints] = await Promise.all([
-    fetchOpenViolationRows(address.bbl),
-    fetchTotalViolationCount(address.bbl),
-    fetch311(address.zip),
-    fetchFacts(address.bbl),
-    fetchFootprint(address.bin),
-    fetchComplaints(address.bbl),
+    fetchOpenViolationRows(address.bbl, signal),
+    fetchTotalViolationCount(address.bbl, signal),
+    fetch311(address.zip, signal),
+    fetchFacts(address.bbl, signal),
+    fetchFootprint(address.bin, signal),
+    fetchComplaints(address.bbl, signal),
   ]);
   const allOpen = violationResult.rows.map(violationRecord);
   const { current, historical } = filterRedevelopmentViolations(allOpen, facts?.yearBuilt ?? 0);
@@ -446,17 +476,18 @@ async function buildAssessment(address: Address): Promise<BuildingAssessment> {
   };
 }
 
-export async function assessBuilding(address: Address): Promise<BuildingAssessment> {
+export async function assessBuilding(address: Address, signal?: AbortSignal): Promise<BuildingAssessment> {
+  throwIfAborted(signal);
   const key = address.bbl || `${address.label}|${address.zip}`;
   const cached = assessmentCache.get(key);
   if (cached && cached.expires > Date.now()) return cached.value;
-  const value = await buildAssessment(address);
+  const value = await buildAssessment(address, signal);
   assessmentCache.set(key, { expires: Date.now() + PROFILE_TTL, value });
   return value;
 }
 
-export async function buildProfile(address: Address): Promise<BuildingProfile> {
-  const assessment = await assessBuilding(address);
+export async function buildProfile(address: Address, signal?: AbortSignal): Promise<BuildingProfile> {
+  const assessment = await assessBuilding(address, signal);
   if (!assessment.profile) throw new Error("Building record unavailable");
   return assessment.profile;
 }

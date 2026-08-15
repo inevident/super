@@ -29,7 +29,7 @@ const SAFE: Array<{
   {
     category: "vermin",
     label: "Enclosed traps",
-    query: "enclosed indoor pest traps mice roach",
+    query: "enclosed reusable mouse trap station indoor",
     pattern: /ROACH|MICE|\bRATS?\b|VERMIN|BEDBUG|PEST/i,
   },
   {
@@ -46,6 +46,44 @@ const SAFE: Array<{
     supplemental: true,
   },
 ];
+
+const PRODUCT_TITLE_MATCH: Record<PrecheckCategory, RegExp> = {
+  heat: /\b(?:space|ceramic) heater\b/i,
+  mold: /\bdehumidifier\b/i,
+  vermin: /\b(?:enclosed|covered|multi[\s-]?catch|catch[\s-]?and[\s-]?release|trap station|electric (?:mouse|rat) trap)\b/i,
+  leaks: /\b(?:leak detector|water sensor|leak alarm)\b/i,
+  "lead-dust": /\btrue\s+hepa\b/i,
+  privacy: /\b(?:(?:blackout|privacy).*(?:curtain|shade|blind|window film)|(?:curtain|shade|blind|window film).*?(?:blackout|privacy))\b/i,
+  drafts: /\b(?:window insulation|draft stopper|draft blocker|weatherstrip|weather strip)\b/i,
+  noise: /\b(?:white noise|sound machine)\b/i,
+  storage: /\b(?:under[\s-]?bed storage|storage (?:bin|bag|container))\b/i,
+};
+
+const PRODUCT_TITLE_REJECT: Partial<Record<PrecheckCategory, RegExp>> = {
+  vermin: /\b(?:glue|sticky|adhesive)\b/i,
+  heat: /\b(?:propane|natural gas|kerosene|butane|fuel(?:ed)?)\b/i,
+  "lead-dust": /\b(?:replacement|filter only|filter pack)\b/i,
+  privacy: /\b(?:corded|bracket|screws?|required hardware|mounting hardware|permanent mount)\b/i,
+};
+
+const TEMPORARY_PRIVACY = /\b(?:no[\s-]?drill|temporary|static[\s-]?cling|peel[\s-]?(?:and|&)[\s-]?stick|self[\s-]?adhesive)\b/i;
+
+export function productMatchesPrecheck(
+  category: PrecheckCategory,
+  title: string,
+  query = ""
+) {
+  const rejected = PRODUCT_TITLE_REJECT[category];
+  if (rejected?.test(title) || !PRODUCT_TITLE_MATCH[category].test(title)) return false;
+  if (category === "privacy" && !TEMPORARY_PRIVACY.test(title)) return false;
+  if (category === "vermin") {
+    const target = query.toLowerCase();
+    if (/\b(?:mouse|mice|rat|rodent)\b/.test(target) && !/\b(?:mouse|mice|rat|rodent)\b/i.test(title)) return false;
+    if (/\b(?:roach|cockroach)\b/.test(target) && !/\b(?:roach|cockroach)\b/i.test(title)) return false;
+    if (/\bbed[\s-]?bug\b/.test(target) && !/\bbed[\s-]?bug\b/i.test(title)) return false;
+  }
+  return true;
+}
 
 const LANDLORD: Array<{ kind: string; pattern: RegExp; summary: string }> = [
   {
@@ -92,7 +130,7 @@ function descriptions(records: ViolationRecord[]) {
 export function buildPrecheckRequirements(records: ViolationRecord[]): PrecheckRequirement[] {
   const text = descriptions(records);
   return SAFE.flatMap((mapping) => {
-    const count = text.filter((description) => {
+    const hits = text.filter((description) => {
       if (/HOT WATER/i.test(description) && mapping.category === "heat") return false;
       if (LANDLORD.some((item) => item.pattern.test(description)) && mapping.category !== "heat") {
         // A life-safety/building-system violation is never converted into a kit
@@ -100,8 +138,19 @@ export function buildPrecheckRequirements(records: ViolationRecord[]): PrecheckR
         return false;
       }
       return mapping.pattern.test(description);
-    }).length;
+    });
+    const count = hits.length;
     if (!count) return [];
+    let query = mapping.query;
+    if (mapping.category === "vermin") {
+      if (hits.some((description) => /\b(?:MICE|MOUSE|RATS?|RODENT)\b/.test(description))) {
+        query = "enclosed reusable mouse trap station indoor";
+      } else if (hits.some((description) => /\b(?:ROACH|COCKROACH)\b/.test(description))) {
+        query = "enclosed roach trap station indoor apartment";
+      } else if (hits.some((description) => /\bBEDBUG|BED BUG\b/.test(description))) {
+        query = "enclosed bed bug interceptor trap apartment";
+      }
+    }
     const suffix = mapping.supplemental
       ? " Supplemental only; this does not remediate lead paint."
       : "";
@@ -109,9 +158,10 @@ export function buildPrecheckRequirements(records: ViolationRecord[]): PrecheckR
       {
         category: mapping.category,
         label: mapping.label,
-        query: mapping.query,
+        query,
         violationCount: count,
         reason: `${count} open ${mapping.category.replace("-", " ")} violation${count === 1 ? "" : "s"}.${suffix}`,
+        basis: "violation" as const,
         supplemental: mapping.supplemental,
       },
     ];
@@ -126,31 +176,69 @@ export function buildLandlordRedFlags(records: ViolationRecord[]): LandlordRedFl
   });
 }
 
-export async function pricePrecheckKits(listings: MarketplaceListing[]) {
-  const uniqueRequirements = new Map<PrecheckCategory, PrecheckRequirement>();
+export function selectPrecheckCatalogRequirements(listings: MarketplaceListing[]) {
+  return selectPrecheckCatalogTasks(listings).map((task) => task.requirement);
+}
+
+export type PrecheckCatalogTask = {
+  key: string;
+  zip: string;
+  requirement: PrecheckRequirement;
+};
+
+function listingZip(listing: MarketplaceListing) {
+  return listing.buildings.map((building) => building.zip).find(Boolean) ?? "10001";
+}
+
+function catalogTaskKey(requirement: PrecheckRequirement, zip: string) {
+  return `${requirement.category}|${zip}|${requirement.query.trim().toLowerCase()}`;
+}
+
+export function selectPrecheckCatalogTasks(listings: MarketplaceListing[]) {
+  const uniqueRequirements = new Map<string, PrecheckCatalogTask>();
   for (const listing of listings) {
+    const zip = listingZip(listing);
     for (const requirement of listing.precheck.categories) {
-      if (!uniqueRequirements.has(requirement.category)) {
-        uniqueRequirements.set(requirement.category, requirement);
+      const key = catalogTaskKey(requirement, zip);
+      if (!uniqueRequirements.has(key)) {
+        uniqueRequirements.set(key, { key, zip, requirement });
       }
     }
   }
 
-  // There are exactly five allowed categories, so this is a hard global ceiling
-  // even when six listings need the same products.
-  const requirements = [...uniqueRequirements.values()].slice(0, 5);
-  const zip = listings.flatMap((listing) => listing.buildings.map((building) => building.zip)).find(Boolean) ?? "10001";
+  // Keep a hard five-search ceiling across every shortlisted listing. Violation
+  // mitigations win the shared slots before optional building/photo/location fit.
+  const basisPriority = { violation: 0, building: 1, photo: 2, location: 3 } as const;
+  return [...uniqueRequirements.values()]
+    .sort((a, b) => basisPriority[a.requirement.basis] - basisPriority[b.requirement.basis])
+    .slice(0, 5);
+}
+
+export async function pricePrecheckKits(
+  listings: MarketplaceListing[],
+  catalogSearch: typeof searchCatalog = searchCatalog,
+  signal?: AbortSignal
+) {
+  const tasks = selectPrecheckCatalogTasks(listings);
   const priced = await Promise.all(
-    requirements.map(async (requirement) => {
+    tasks.map(async ({ key, requirement, zip }) => {
       try {
-        const products = await searchCatalog(requirement.query, zip);
-        return { category: requirement.category, product: pickBest(products) };
-      } catch {
-        return { category: requirement.category, product: null };
+        const products = signal
+          ? await catalogSearch(requirement.query, zip, signal)
+          : await catalogSearch(requirement.query, zip);
+        return {
+          key,
+          product: pickBest(products.filter((product) =>
+            productMatchesPrecheck(requirement.category, product.title, requirement.query)
+          )),
+        };
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        return { key, product: null };
       }
     })
   );
-  const products = new Map(priced.map((result) => [result.category, result.product]));
+  const products = new Map(priced.map((result) => [result.key, result.product]));
 
   return listings.map((listing) => {
     const categories = listing.precheck.categories;
@@ -160,18 +248,20 @@ export async function pricePrecheckKits(listings: MarketplaceListing[]) {
         precheck: { categories: [], items: [], total: 0, pricingStatus: "priced" as const, oneTime: true as const },
       };
     }
+    const zip = listingZip(listing);
     const items = categories.map((requirement) => ({
       ...requirement,
-      product: products.get(requirement.category) ?? null,
+      product: products.get(catalogTaskKey(requirement, zip)) ?? null,
     }));
-    const complete = items.every((item) => item.product);
+    const requiredItems = items.filter((item) => !item.optional);
+    const complete = requiredItems.every((item) => item.product);
     return {
       ...listing,
       precheck: {
         categories,
         items,
         total: complete
-          ? items.reduce((sum, item) => sum + (item.product?.price ?? 0), 0)
+          ? Math.round(requiredItems.reduce((sum, item) => sum + (item.product?.price ?? 0), 0) * 100) / 100
           : null,
         pricingStatus: complete ? ("priced" as const) : ("unavailable" as const),
         oneTime: true as const,

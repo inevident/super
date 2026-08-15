@@ -1,12 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { groupUnitOffers } from "../lib/housing-connect";
-import { evaluateEligibility } from "../lib/marketplace";
+import { DEMO_PICKS, DEMO_STEPS } from "../lib/fixtures";
+import {
+  chooseMarketplaceCandidates,
+  evaluateEligibility,
+  mapWithConcurrency,
+  nearbyViolationHint,
+  selectMarketplaceListings,
+} from "../lib/marketplace";
 import { calculateRisk, filterRedevelopmentViolations } from "../lib/nyc";
 import { parseBriefDeterministically } from "../lib/planner";
+import { recordedPrecheckShowcase } from "../lib/showcase";
 import {
   buildLandlordRedFlags,
   buildPrecheckRequirements,
   pricePrecheckKits,
+  productMatchesPrecheck,
+  selectPrecheckCatalogRequirements,
+  selectPrecheckCatalogTasks,
 } from "../lib/precheck";
 import { pickBest, rentable } from "../lib/ucp";
 import type {
@@ -14,6 +25,7 @@ import type {
   Product,
   RiskSummary,
   SearchPlan,
+  PrecheckRequirement,
   ViolationRecord,
 } from "../lib/types";
 
@@ -43,8 +55,8 @@ const LOW_RISK: RiskSummary = {
   explanation: "No open HPD violations found for the current structure.",
 };
 
-function listing(): MarketplaceListing {
-  return {
+function listing(overrides: Partial<MarketplaceListing> = {}): MarketplaceListing {
+  const base: MarketplaceListing = {
     id: "1",
     title: "Test",
     description: "",
@@ -74,6 +86,7 @@ function listing(): MarketplaceListing {
     applyUrl: "https://housingconnect.nyc.gov/PublicWeb/details/1",
     source: "snapshot",
   };
+  return { ...base, ...overrides };
 }
 
 describe("marketplace planning", () => {
@@ -210,6 +223,12 @@ describe("safe Precheck kit", () => {
     ]);
   });
 
+  it("does not relabel ordinary paint or plaster work as a lead violation", () => {
+    expect(buildPrecheckRequirements([
+      violation({ description: "PAINT WITH LIGHT COLORED PAINT AT PUBLIC HALL WALLS" }),
+    ])).toEqual([]);
+  });
+
   it("never lets rejected hardwired or high-voltage products re-enter as fallback", () => {
     const products: Product[] = [
       {
@@ -224,8 +243,365 @@ describe("safe Precheck kit", () => {
     expect(pickBest(products)).toBeNull();
   });
 
+  it("rejects a wrong product category even when Shopify ranks it cheaply", () => {
+    expect(productMatchesPrecheck("vermin", "Rat, Mouse & Insect Glue Traps")).toBe(false);
+    expect(
+      productMatchesPrecheck(
+        "vermin",
+        "Pro Series Multi-Catch Mouse Trap Includes Replaceable Glue Board"
+      )
+    ).toBe(false);
+    expect(productMatchesPrecheck("vermin", "Enclosed Reusable Multi-Catch Mouse Trap")).toBe(true);
+    expect(productMatchesPrecheck("lead-dust", "True HEPA Air Purifier")).toBe(true);
+    expect(productMatchesPrecheck("lead-dust", "HEPA Air Purifier")).toBe(false);
+    expect(productMatchesPrecheck("lead-dust", "True HEPA Replacement Filter Pack")).toBe(false);
+    expect(productMatchesPrecheck("privacy", "Temporary No-Drill Blackout Privacy Window Shade")).toBe(true);
+    expect(productMatchesPrecheck("privacy", "Blackout Privacy Window Shade with Brackets")).toBe(false);
+    expect(productMatchesPrecheck("privacy", "Permanent Drill Mount Blackout Blind")).toBe(false);
+    expect(productMatchesPrecheck("noise", "Compact White Noise Sound Machine")).toBe(true);
+    expect(productMatchesPrecheck("storage", "Under-Bed Storage Bins")).toBe(true);
+    expect(productMatchesPrecheck("heat", "Portable Ceramic Space Heater")).toBe(true);
+    expect(productMatchesPrecheck("heat", "Portable Propane Space Heater")).toBe(false);
+    expect(productMatchesPrecheck("mold", "Small Room Dehumidifier")).toBe(true);
+    expect(productMatchesPrecheck("leaks", "Wi-Fi Water Leak Detector")).toBe(true);
+    expect(productMatchesPrecheck("drafts", "Removable Window Insulation Kit")).toBe(true);
+    expect(productMatchesPrecheck(
+      "vermin",
+      "Enclosed Reusable Mouse Trap Station",
+      "enclosed roach trap station indoor apartment"
+    )).toBe(false);
+    expect(productMatchesPrecheck(
+      "vermin",
+      "Enclosed Roach Trap Station",
+      "enclosed roach trap station indoor apartment"
+    )).toBe(true);
+  });
+
+  it("keeps the recorded scanner fallback renter-scale and glue-free", () => {
+    expect(DEMO_PICKS.map((pick) => pick.need.label)).toEqual([
+      "enclosed traps",
+      "space heater",
+    ]);
+    const titles = DEMO_PICKS.flatMap((pick) => (pick.product ? [pick.product.title] : [])).join(" ");
+    expect(titles).not.toMatch(/water heater|alarm|glue|sticky/i);
+    expect(JSON.stringify(DEMO_STEPS)).not.toMatch(/water heater|CO detector|glue trap|sticky glue/i);
+  });
+
   it("prices a clean building at $0 without calling Shopify", async () => {
     const [clean] = await pricePrecheckKits([listing()]);
     expect(clean.precheck).toMatchObject({ total: 0, pricingStatus: "priced", items: [] });
+  });
+
+  it("deduplicates catalog work, caps it at five, and prices violation needs first", () => {
+    const requirement = (
+      category: PrecheckRequirement["category"],
+      basis: PrecheckRequirement["basis"]
+    ): PrecheckRequirement => ({
+      category,
+      basis,
+      label: category,
+      query: category,
+      reason: category,
+      violationCount: basis === "violation" ? 1 : 0,
+      optional: basis !== "violation",
+    });
+    const first = listing({
+      precheck: {
+        categories: [
+          requirement("noise", "location"),
+          requirement("storage", "building"),
+          requirement("privacy", "photo"),
+        ],
+        items: [], total: null, pricingStatus: "unavailable", oneTime: true,
+      },
+    });
+    const second = listing({
+      id: "second",
+      precheck: {
+        categories: [
+          requirement("storage", "building"),
+          requirement("heat", "violation"),
+          requirement("vermin", "violation"),
+          requirement("drafts", "building"),
+        ],
+        items: [], total: null, pricingStatus: "unavailable", oneTime: true,
+      },
+    });
+
+    expect(selectPrecheckCatalogRequirements([first, second]).map((item) => item.category))
+      .toEqual(["heat", "vermin", "storage", "drafts", "privacy"]);
+  });
+
+  it("computes a complete live total only from a category-matching product", async () => {
+    const categories = buildPrecheckRequirements([
+      violation({ description: "PROVIDE ADEQUATE HEAT" }),
+    ]);
+    const catalog = vi.fn(async () => [{
+      title: "Portable Ceramic Space Heater",
+      price: 29.99,
+      currency: "USD",
+      url: "https://shop.example/heater",
+      merchant: "shop.example",
+    }]);
+    const [priced] = await pricePrecheckKits([
+      listing({
+        buildings: [{ address: "1 Test Street", city: "Brooklyn", zip: "11201", latitude: 40.7, longitude: -73.9, bbl: "", bin: "" }],
+        precheck: { categories, items: [], total: null, pricingStatus: "unavailable", oneTime: true },
+      }),
+    ], catalog);
+
+    expect(catalog).toHaveBeenCalledWith(categories[0].query, "11201");
+    expect(priced.precheck).toMatchObject({ total: 29.99, pricingStatus: "priced" });
+    expect(priced.precheck.items[0].product?.title).toBe("Portable Ceramic Space Heater");
+  });
+
+  it("prices optional fit items separately from the violation Precheck total", async () => {
+    const [heat] = buildPrecheckRequirements([violation({ description: "PROVIDE ADEQUATE HEAT" })]);
+    const privacy: PrecheckRequirement = {
+      category: "privacy",
+      label: "No-drill privacy shade",
+      query: "temporary no drill blackout privacy window shade apartment renter",
+      reason: "Development-photo fit item.",
+      violationCount: 0,
+      basis: "photo",
+      optional: true,
+    };
+    const catalog = vi.fn(async (query: string) => query.includes("heater") ? [{
+      title: "Portable Ceramic Space Heater",
+      price: 30,
+      currency: "USD",
+      url: "https://shop.example/heater",
+      merchant: "shop.example",
+    }] : [{
+      title: "Temporary No-Drill Blackout Privacy Window Shade",
+      price: 18,
+      currency: "USD",
+      url: "https://shop.example/shade",
+      merchant: "shop.example",
+    }]);
+    const [priced] = await pricePrecheckKits([listing({
+      buildings: [{ address: "1 Test Street", city: "Brooklyn", zip: "11201", latitude: 40.7, longitude: -73.9, bbl: "", bin: "" }],
+      precheck: {
+        categories: [heat, privacy], items: [], total: null, pricingStatus: "unavailable", oneTime: true,
+      },
+    })], catalog as any);
+
+    expect(priced.precheck.total).toBe(30);
+    expect(priced.precheck.pricingStatus).toBe("priced");
+    expect(priced.precheck.items.find((item) => item.optional)?.product?.price).toBe(18);
+  });
+
+  it("keeps a priced violation kit when an optional extra is unavailable", async () => {
+    const [heat] = buildPrecheckRequirements([violation({ description: "PROVIDE ADEQUATE HEAT" })]);
+    const privacy: PrecheckRequirement = {
+      category: "privacy",
+      label: "No-drill privacy shade",
+      query: "temporary no drill blackout privacy window shade apartment renter",
+      reason: "Optional photo fit.",
+      violationCount: 0,
+      basis: "photo",
+      optional: true,
+    };
+    const [priced] = await pricePrecheckKits([listing({
+      precheck: {
+        categories: [heat, privacy], items: [], total: null, pricingStatus: "unavailable", oneTime: true,
+      },
+    })], async (query: string) => query.includes("heater") ? [{
+      title: "Portable Ceramic Space Heater",
+      price: 25,
+      currency: "USD",
+      url: "https://shop.example/heater",
+      merchant: "shop.example",
+    }] : []);
+
+    expect(priced.precheck).toMatchObject({ total: 25, pricingStatus: "priced" });
+    expect(priced.precheck.items.find((item) => item.optional)?.product).toBeNull();
+  });
+
+  it("keeps Shopify availability tied to each listing ZIP", async () => {
+    const [heat] = buildPrecheckRequirements([violation({ description: "PROVIDE ADEQUATE HEAT" })]);
+    const targets = [
+      listing({
+        id: "brooklyn",
+        buildings: [{ address: "1 A St", city: "Brooklyn", zip: "11201", latitude: null, longitude: null, bbl: "", bin: "" }],
+        precheck: { categories: [heat], items: [], total: null, pricingStatus: "unavailable", oneTime: true },
+      }),
+      listing({
+        id: "queens",
+        buildings: [{ address: "2 B St", city: "Queens", zip: "11372", latitude: null, longitude: null, bbl: "", bin: "" }],
+        precheck: { categories: [heat], items: [], total: null, pricingStatus: "unavailable", oneTime: true },
+      }),
+    ];
+    expect(selectPrecheckCatalogTasks(targets).map((task) => task.zip)).toEqual(["11201", "11372"]);
+    const catalog = vi.fn(async (_query: string, zip: string) => [{
+      title: `Portable Ceramic Space Heater ${zip}`,
+      price: zip === "11201" ? 29 : 39,
+      currency: "USD",
+      url: `https://shop.example/heater-${zip}`,
+      merchant: "shop.example",
+    }]);
+    const [brooklyn, queens] = await pricePrecheckKits(targets, catalog as any);
+
+    expect(catalog).toHaveBeenCalledTimes(2);
+    expect(brooklyn.precheck.items[0].product?.title).toContain("11201");
+    expect(queens.precheck.items[0].product?.title).toContain("11372");
+  });
+
+  it("marks pricing unavailable when Shopify returns the wrong category or fails", async () => {
+    const categories = buildPrecheckRequirements([
+      violation({ description: "PROVIDE ADEQUATE HEAT" }),
+    ]);
+    const target = listing({
+      precheck: { categories, items: [], total: null, pricingStatus: "unavailable", oneTime: true },
+    });
+    const [wrong] = await pricePrecheckKits([target], async () => [{
+      title: "Decorative Table Lamp",
+      price: 20,
+      currency: "USD",
+      url: "https://shop.example/lamp",
+      merchant: "shop.example",
+    }]);
+    const [failed] = await pricePrecheckKits([target], async () => {
+      throw new Error("catalog unavailable");
+    });
+
+    expect(wrong.precheck).toMatchObject({ total: null, pricingStatus: "unavailable" });
+    expect(wrong.precheck.items[0].product).toBeNull();
+    expect(failed.precheck).toMatchObject({ total: null, pricingStatus: "unavailable" });
+  });
+});
+
+describe("marketplace result selection", () => {
+  it("provides a clearly labeled, safe recorded fallback when live inventory has no kit", () => {
+    const showcase = recordedPrecheckShowcase();
+    expect(showcase.source).toBe("showcase");
+    expect(showcase.risk.level).toBe("High");
+    expect(showcase.precheck.categories.map((item) => item.category)).toEqual([
+      "vermin",
+      "heat",
+    ]);
+    expect(showcase.landlordRedFlags.map((item) => item.kind)).toEqual([
+      "Hot water",
+      "Alarm systems",
+    ]);
+    expect(showcase.applyUrl).toBe("");
+  });
+
+  it("uses the citywide violation map to reserve risk-probe slots", () => {
+    const inventory = Array.from({ length: 8 }, (_, index) => ({
+      lotteryId: index + 1,
+      markers: [{ lat: String(40.7 + index / 100), lng: "-73.9" }],
+    }));
+    const riskIndex = { lat: [40.77], lon: [-73.9], n: [400] };
+    const input = { brief: "", householdSize: 2, annualIncome: 75_000 };
+    const plan: SearchPlan = {
+      boroughs: [], neighborhoods: [], bedrooms: null, maxRent: null,
+      subwayLines: [], amenities: [], priorities: [], generatedBy: "rules",
+    };
+
+    expect(nearbyViolationHint(inventory[7], riskIndex)).toBeGreaterThan(0);
+    expect(chooseMarketplaceCandidates(inventory, input, plan, riskIndex).map((item) => item.lotteryId))
+      .toContain(8);
+  });
+
+  it("returns no risk hint for missing, malformed, or distant map data", () => {
+    expect(nearbyViolationHint({ lotteryId: 1, markers: [] }, null)).toBe(0);
+    expect(nearbyViolationHint({ lotteryId: 1, markers: {} as any }, { lat: [40.7], lon: [-73.9], n: [100] })).toBe(0);
+    expect(nearbyViolationHint(
+      { lotteryId: 1, markers: [{ lat: "bad", lng: "-73.9" }] },
+      { lat: [40.7], lon: [-73.9], n: [100] }
+    )).toBe(0);
+    expect(nearbyViolationHint(
+      { lotteryId: 1, markers: [{ lat: "41.7", lng: "-73.9" }] },
+      { lat: [40.7], lon: [-73.9], n: [100] }
+    )).toBe(0);
+  });
+
+  it("bounds concurrent marketplace enrichment work", async () => {
+    let active = 0;
+    let maximum = 0;
+    const values = await mapWithConcurrency([1, 2, 3, 4, 5], 2, async (value) => {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await Promise.resolve();
+      active -= 1;
+      return value * 2;
+    });
+    expect(values).toEqual([2, 4, 6, 8, 10]);
+    expect(maximum).toBeLessThanOrEqual(2);
+  });
+
+  it("retains an actionable high-risk building as a clearly marked spotlight", () => {
+    const clean = Array.from({ length: 7 }, (_, index) => listing({ id: `clean-${index}` }));
+    const riskyViolation = violation({ id: "risky", class: "C", description: "ABATE MOLD AND DAMP CONDITION" });
+    const risky = listing({
+      id: "risky",
+      risk: {
+        level: "High",
+        openCount: 18,
+        classCounts: { A: 0, B: 0, C: 18 },
+        recentCount: 18,
+        residentialUnits: 10,
+        explanation: "18 open Class C violations.",
+      },
+      violations: [riskyViolation],
+      precheck: {
+        categories: buildPrecheckRequirements([riskyViolation]),
+        items: [],
+        total: null,
+        pricingStatus: "unavailable",
+        oneTime: true,
+      },
+    });
+    const plan: SearchPlan = {
+      boroughs: [], neighborhoods: [], bedrooms: null, maxRent: null,
+      subwayLines: [], amenities: [], priorities: [], generatedBy: "rules",
+    };
+
+    const selected = selectMarketplaceListings([...clean, risky], plan);
+
+    expect(selected).toHaveLength(7);
+    expect(selected.find((item) => item.id === "risky")?.spotlight).toBe("precheck");
+  });
+
+  it("keeps the six strongest results when no violation produces a safe kit", () => {
+    const plan: SearchPlan = {
+      boroughs: [], neighborhoods: [], bedrooms: null, maxRent: null,
+      subwayLines: [], amenities: [], priorities: [], generatedBy: "rules",
+    };
+    expect(selectMarketplaceListings(
+      Array.from({ length: 8 }, (_, index) => listing({ id: String(index) })),
+      plan
+    )).toHaveLength(6);
+  });
+
+  it("caps retained results at eight when several risky buildings are actionable", () => {
+    const riskyViolation = violation({ class: "C", description: "ERADICATE MICE" });
+    const plan: SearchPlan = {
+      boroughs: [], neighborhoods: [], bedrooms: null, maxRent: null,
+      subwayLines: [], amenities: [], priorities: [], generatedBy: "rules",
+    };
+    const selected = selectMarketplaceListings(
+      Array.from({ length: 10 }, (_, index) => listing({
+        id: `risky-${index}`,
+        risk: {
+          level: "High",
+          openCount: 10 + index,
+          classCounts: { A: 0, B: 0, C: 10 + index },
+          recentCount: 10 + index,
+          residentialUnits: 10,
+          explanation: "High risk",
+        },
+        violations: [riskyViolation],
+        precheck: {
+          categories: buildPrecheckRequirements([riskyViolation]),
+          items: [], total: null, pricingStatus: "unavailable", oneTime: true,
+        },
+      })),
+      plan
+    );
+
+    expect(selected).toHaveLength(8);
+    expect(selected.filter((item) => item.spotlight === "precheck")).toHaveLength(1);
   });
 });

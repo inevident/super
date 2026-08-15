@@ -167,7 +167,18 @@ export type RiskSummary = {
   explanation: string;
 };
 
-export type PrecheckCategory = "heat" | "mold" | "vermin" | "leaks" | "lead-dust";
+export type PrecheckCategory =
+  | "heat"
+  | "mold"
+  | "vermin"
+  | "leaks"
+  | "lead-dust"
+  | "privacy"
+  | "drafts"
+  | "noise"
+  | "storage";
+
+export type PrecheckBasis = "violation" | "building" | "location" | "photo";
 
 export type PrecheckRequirement = {
   category: PrecheckCategory;
@@ -175,7 +186,9 @@ export type PrecheckRequirement = {
   query: string;
   reason: string;
   violationCount: number;
+  basis: PrecheckBasis;
   supplemental?: boolean;
+  optional?: boolean;
 };
 
 export type PrecheckItem = PrecheckRequirement & { product: Product | null };
@@ -186,6 +199,7 @@ export type PrecheckKit = {
   total: number | null;
   pricingStatus: "priced" | "unavailable";
   oneTime: true;
+  photoAnalysisStatus?: "not-run" | "complete" | "unavailable";
 };
 
 export type LandlordRedFlag = {
@@ -211,6 +225,7 @@ export type Eligibility = {
 
 export type MarketplaceListing = {
   id: string;
+  spotlight?: "precheck";
   title: string;
   description: string;
   borough: string;
@@ -237,7 +252,7 @@ export type MarketplaceListing = {
   excludedHistoricalViolations: ViolationRecord[];
   profile: BuildingProfile | null;
   applyUrl: string;
-  source: "live" | "snapshot";
+  source: "live" | "snapshot" | "showcase";
 };
 
 export type BuildingAssessment = {
@@ -255,6 +270,6 @@ export type MarketplaceEvent =
   | { stage: "inspecting"; message: string; completed: number; total: number }
   | { stage: "listing"; listing: MarketplaceListing }
   | { stage: "pricing"; message: string }
-  | { stage: "results"; exact: MarketplaceListing[]; near: MarketplaceListing[] }
+  | { stage: "results"; exact: MarketplaceListing[]; near: MarketplaceListing[]; showcase?: MarketplaceListing }
   | { stage: "done" }
   | { stage: "error"; message: string };

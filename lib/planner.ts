@@ -209,7 +209,8 @@ function sanitizePlan(raw: Record<string, unknown>, fallback: SearchPlan): Searc
   };
 }
 
-export async function planRenterSearch(input: RenterBrief): Promise<SearchPlan> {
+export async function planRenterSearch(input: RenterBrief, signal?: AbortSignal): Promise<SearchPlan> {
+  if (signal?.aborted) throw Object.assign(new Error("Request aborted"), { name: "AbortError" });
   const cacheKey = JSON.stringify([
     input.brief.trim().toLowerCase(),
     input.householdSize,
@@ -242,13 +243,20 @@ export async function planRenterSearch(input: RenterBrief): Promise<SearchPlan> 
         "Do not decide eligibility and do not infer income, household size, or unstated requirements.",
         "Use set_search_plan once. Bedrooms are exact unless the renter says at least or minimum.",
       ].join("\n"),
-      { forceTool: "set_search_plan" }
+      {
+        forceTool: "set_search_plan",
+        requireTool: true,
+        deadlineMs: 8_000,
+        perModelTimeoutMs: 4_000,
+        signal,
+      }
     );
     const use = response.content.find(
       (block: any) => block.type === "tool_use" && block.name === "set_search_plan"
     );
     return remember(use?.input ? sanitizePlan(use.input, fallback) : fallback);
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error;
     return remember(fallback);
   }
 }

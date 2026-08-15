@@ -1,19 +1,37 @@
 import { runMarketplaceSearch } from "@/lib/marketplace";
+import { parseRenterBrief } from "@/lib/renter-brief";
 import type { MarketplaceEvent, RenterBrief } from "@/lib/types";
 
 export type MarketplaceSearchRunner = (
   input: RenterBrief,
-  emit: (event: MarketplaceEvent) => void
+  emit: (event: MarketplaceEvent) => void,
+  options?: { signal?: AbortSignal }
 ) => Promise<unknown>;
 
-function renterBrief(value: unknown): RenterBrief | null {
-  const candidate = value as Record<string, unknown> | null;
-  const brief = String(candidate?.brief ?? "").trim().slice(0, 600);
-  const householdSize = Number(candidate?.householdSize);
-  const annualIncome = Number(candidate?.annualIncome);
-  if (!brief || !Number.isInteger(householdSize) || householdSize < 1 || householdSize > 20) return null;
-  if (!Number.isFinite(annualIncome) || annualIncome < 0 || annualIncome > 10_000_000) return null;
-  return { brief, householdSize, annualIncome: Math.round(annualIncome) };
+const MAX_ACTIVE_SEARCHES = 4;
+const MAX_SEARCHES_PER_MINUTE = 30;
+let activeSearches = 0;
+const recentSearches = new Map<string, number[]>();
+
+function clientKey(request: Request) {
+  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "local";
+}
+
+function searchLimitResponse(request: Request) {
+  const now = Date.now();
+  const key = clientKey(request);
+  const recent = (recentSearches.get(key) ?? []).filter((time) => now - time < 60_000);
+  if (activeSearches >= MAX_ACTIVE_SEARCHES || recent.length >= MAX_SEARCHES_PER_MINUTE) {
+    return Response.json(
+      { error: "Super is checking several buildings right now. Try again in a moment." },
+      { status: 429, headers: { "retry-after": "5" } }
+    );
+  }
+  recent.push(now);
+  recentSearches.set(key, recent);
+  return null;
 }
 
 export async function marketplaceSearchResponse(
@@ -22,7 +40,7 @@ export async function marketplaceSearchResponse(
 ) {
   let input: RenterBrief | null = null;
   try {
-    input = renterBrief(await request.json());
+    input = parseRenterBrief(await request.json());
   } catch {}
   if (!input) {
     return Response.json(
@@ -31,10 +49,25 @@ export async function marketplaceSearchResponse(
     );
   }
 
+  const limited = searchLimitResponse(request);
+  if (limited) return limited;
+
+  activeSearches += 1;
+  const searchAbort = new AbortController();
+  const abortFromRequest = () => searchAbort.abort(request.signal.reason);
+  request.signal.addEventListener("abort", abortFromRequest, { once: true });
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    activeSearches = Math.max(0, activeSearches - 1);
+    request.signal.removeEventListener("abort", abortFromRequest);
+  };
+
+  let closed = false;
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
-      let closed = false;
       const send = (event: MarketplaceEvent) => {
         if (!closed) controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       };
@@ -45,14 +78,21 @@ export async function marketplaceSearchResponse(
         }
       };
       try {
-        await runner(input!, send);
+        await runner(input!, send, { signal: searchAbort.signal });
         send({ stage: "done" });
       } catch (error: unknown) {
+        if (searchAbort.signal.aborted) return;
         const message = error instanceof Error ? error.message : "Marketplace search failed";
         send({ stage: "error", message });
       } finally {
         close();
+        release();
       }
+    },
+    cancel() {
+      closed = true;
+      searchAbort.abort();
+      release();
     },
   });
 

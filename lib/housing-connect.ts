@@ -108,13 +108,31 @@ const detailCache = new Map<
 >();
 let snapshotCache: Snapshot | null = null;
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+function abortError() {
+  const error = new Error("Request aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw abortError();
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  externalSignal?: AbortSignal
+) {
   const controller = new AbortController();
+  const abort = () => controller.abort(externalSignal?.reason);
+  externalSignal?.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal, cache: "no-store" });
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", abort);
   }
 }
 
@@ -130,7 +148,8 @@ function snapshot(): Snapshot {
   return snapshotCache;
 }
 
-export async function getHousingInventory(): Promise<HousingInventory> {
+export async function getHousingInventory(signal?: AbortSignal): Promise<HousingInventory> {
+  throwIfAborted(signal);
   if (inventoryCache && inventoryCache.expires > Date.now()) return inventoryCache.value;
 
   try {
@@ -141,7 +160,8 @@ export async function getHousingInventory(): Promise<HousingInventory> {
         headers: { "content-type": "application/json", accept: "application/json" },
         body: JSON.stringify(SEARCH_BODY),
       },
-      8_000
+      8_000,
+      signal
     );
     if (!response.ok) throw new Error(`Housing Connect ${response.status}`);
     const body = await response.json();
@@ -151,6 +171,7 @@ export async function getHousingInventory(): Promise<HousingInventory> {
     inventoryCache = { expires: Date.now() + SEARCH_TTL, value };
     return value;
   } catch {
+    throwIfAborted(signal);
     const rentals = snapshot().rentals ?? [];
     if (!rentals.length) throw new Error("Housing Connect is temporarily unavailable");
     const value: HousingInventory = { rentals, source: "snapshot" };
@@ -160,8 +181,10 @@ export async function getHousingInventory(): Promise<HousingInventory> {
 }
 
 export async function getLotteryDetail(
-  lotteryId: string | number
+  lotteryId: string | number,
+  signal?: AbortSignal
 ): Promise<{ detail: HousingAdvertisement; source: "live" | "snapshot" } | null> {
+  throwIfAborted(signal);
   const key = String(lotteryId);
   const cached = detailCache.get(key);
   if (cached && cached.expires > Date.now()) return cached.value;
@@ -170,7 +193,8 @@ export async function getLotteryDetail(
     const response = await fetchWithTimeout(
       `${DETAIL_URL}?lotteryId=${encodeURIComponent(key)}`,
       { headers: { accept: "application/json" } },
-      7_000
+      7_000,
+      signal
     );
     if (!response.ok) throw new Error(`Housing Connect detail ${response.status}`);
     const detail = (await response.json()) as HousingAdvertisement;
@@ -179,6 +203,7 @@ export async function getLotteryDetail(
     detailCache.set(key, { expires: Date.now() + DETAIL_TTL, value });
     return value;
   } catch {
+    throwIfAborted(signal);
     const detail = snapshot().details?.[key];
     if (!detail) return null;
     const value = { detail, source: "snapshot" as const };
@@ -187,8 +212,8 @@ export async function getLotteryDetail(
   }
 }
 
-export async function getLotterySummary(lotteryId: string | number) {
-  const inventory = await getHousingInventory();
+export async function getLotterySummary(lotteryId: string | number, signal?: AbortSignal) {
+  const inventory = await getHousingInventory(signal);
   const summary = inventory.rentals.find((item) => String(item.lotteryId) === String(lotteryId));
   return summary ? { summary, source: inventory.source } : null;
 }

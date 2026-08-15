@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   getHousingInventory,
   getLotteryDetail,
@@ -14,8 +16,10 @@ import {
   sortViolations,
   type HousingConnectBuildingRow,
 } from "./nyc";
+import { addContextualPrecheck } from "./contextual-precheck";
 import { planRenterSearch } from "./planner";
 import { buildLandlordRedFlags, buildPrecheckRequirements, pricePrecheckKits } from "./precheck";
+import { PRECHECK_SHOWCASE_ID, recordedPrecheckShowcase } from "./showcase";
 import type {
   Address,
   BuildingAssessment,
@@ -45,6 +49,14 @@ const BOROUGH_CODES: Record<string, string> = {
   SI: "Staten Island",
 };
 
+export type CityRiskIndex = {
+  lat: number[];
+  lon: number[];
+  n: number[];
+};
+
+let cityRiskCache: CityRiskIndex | null | undefined;
+
 function unique<T>(values: T[]) {
   return [...new Set(values)];
 }
@@ -60,6 +72,41 @@ function normalizedAddress(value: string) {
 function finiteNumber(value: unknown): number | null {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function abortError() {
+  const error = new Error("Request aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw abortError();
+}
+
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+  signal?: AbortSignal
+) {
+  const output = new Array<R>(items.length);
+  let next = 0;
+  const run = async () => {
+    while (true) {
+      throwIfAborted(signal);
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      output[index] = await worker(items[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), items.length) }, run));
+  return output;
+}
+
+function summaryMarkers(summary: HousingLotterySummary) {
+  return Array.isArray(summary.markers) ? summary.markers : [];
 }
 
 function summaryRents(summary: HousingLotterySummary) {
@@ -109,6 +156,62 @@ function prelimScore(summary: HousingLotterySummary, input: RenterBrief, plan: S
   return score;
 }
 
+function cityRiskIndex() {
+  if (cityRiskCache !== undefined) return cityRiskCache;
+  try {
+    const parsed = JSON.parse(readFileSync(join(process.cwd(), "public", "citymap.json"), "utf8"));
+    cityRiskCache = Array.isArray(parsed.lat) && Array.isArray(parsed.lon) && Array.isArray(parsed.n)
+      ? { lat: parsed.lat, lon: parsed.lon, n: parsed.n }
+      : null;
+  } catch {
+    cityRiskCache = null;
+  }
+  return cityRiskCache;
+}
+
+export function nearbyViolationHint(summary: HousingLotterySummary, index: CityRiskIndex | null) {
+  if (!index) return 0;
+  let best = 0;
+  for (const marker of summaryMarkers(summary)) {
+    const latitude = Number(marker.lat);
+    const longitude = Number(marker.lng);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+    for (let position = 0; position < index.n.length; position += 1) {
+      const northSouthMiles = (latitude - Number(index.lat[position])) * 69;
+      const eastWestMiles = (longitude - Number(index.lon[position])) * 53;
+      const distanceMiles = Math.hypot(northSouthMiles, eastWestMiles);
+      if (distanceMiles <= 0.05) {
+        best = Math.max(best, Number(index.n[position]) * (1 - distanceMiles / 0.05));
+      }
+    }
+  }
+  return best;
+}
+
+export function chooseMarketplaceCandidates(
+  inventory: HousingLotterySummary[],
+  input: RenterBrief,
+  plan: SearchPlan,
+  index: CityRiskIndex | null = cityRiskIndex()
+) {
+  const ranked = [...inventory].sort((a, b) => prelimScore(b, input, plan) - prelimScore(a, input, plan));
+  const core = ranked.slice(0, 6);
+  const coreIds = new Set(core.map((summary) => String(summary.lotteryId)));
+  const inRequestedArea = (summary: HousingLotterySummary) =>
+    !plan.boroughs.length || plan.boroughs.some((borough) =>
+      compactText(summary.borough).toLowerCase().includes(borough.toLowerCase())
+    );
+  const probes = ranked
+    .filter((summary) => !coreIds.has(String(summary.lotteryId)) && inRequestedArea(summary))
+    .map((summary) => ({ summary, hint: nearbyViolationHint(summary, index) }))
+    .filter((item) => item.hint > 0)
+    .sort((a, b) => b.hint - a.hint)
+    .slice(0, 2)
+    .map((item) => item.summary);
+  const ids = unique([...core, ...probes, ...ranked].map((summary) => String(summary.lotteryId))).slice(0, 8);
+  return ids.map((id) => ranked.find((summary) => String(summary.lotteryId) === id)!);
+}
+
 function fallbackOffers(summary: HousingLotterySummary): UnitOffer[] {
   const rents = summaryRents(summary);
   const counts = summaryBedroomCounts(summary);
@@ -123,7 +226,7 @@ function fallbackOffers(summary: HousingLotterySummary): UnitOffer[] {
         label: bedrooms === 0 ? "Studio" : `${bedrooms} Bedroom`,
         rent: rents[Math.min(bedrooms, Math.max(0, rents.length - 1))] ?? null,
         count,
-        address: compactText(summary.markers?.[0]?.address),
+        address: compactText(summaryMarkers(summary)[0]?.address),
         ami: null,
         minimumHouseholdSize: Number(summary.minHouseholdSize) || 0,
         maximumHouseholdSize: Number(summary.maxHouseholdSize) || 0,
@@ -134,7 +237,7 @@ function fallbackOffers(summary: HousingLotterySummary): UnitOffer[] {
 }
 
 function detailBuildings(detail: HousingAdvertisement | null, summary: HousingLotterySummary) {
-  const buildings = detail?.lotteryBuildings ?? [];
+  const buildings = Array.isArray(detail?.lotteryBuildings) ? detail.lotteryBuildings : [];
   if (buildings.length) {
     return buildings.map((building) => ({
       address: compactText(building.address),
@@ -142,10 +245,10 @@ function detailBuildings(detail: HousingAdvertisement | null, summary: HousingLo
       zip: compactText(building.zip),
       latitude: finiteNumber(building.latitude),
       longitude: finiteNumber(building.longitude),
-      nearbyPlaces: building.nearbyPlaces ?? [],
+      nearbyPlaces: Array.isArray(building.nearbyPlaces) ? building.nearbyPlaces : [],
     }));
   }
-  return (summary.markers ?? []).map((marker) => ({
+  return summaryMarkers(summary).map((marker) => ({
     address: compactText(marker.address),
     city: compactText(marker.city),
     zip: compactText(marker.zip),
@@ -222,18 +325,20 @@ function listingBase(
 ): MarketplaceListing {
   const rawBuildings = detailBuildings(detail, summary);
   const firstBuilding = rawBuildings[0];
-  const offers = detail?.units?.length ? groupUnitOffers(detail.units) : fallbackOffers(summary);
+  const offers = Array.isArray(detail?.units) && detail.units.length
+    ? groupUnitOffers(detail.units)
+    : fallbackOffers(summary);
   const borough = compactText(summary.borough || firstBuilding?.city);
   const neighborhood = compactText(summary.neighborhood);
   const eligibility = evaluateEligibility(offers, borough, neighborhood, input, plan);
   const photos = unique(
-    (detail?.photos ?? [])
+    (Array.isArray(detail?.photos) ? detail.photos : [])
       .map((photo) => compactText(photo.item1))
       .filter((photo) => /^https:\/\//.test(photo))
   );
   if (!photos.length && summary.defaultPhotoStream) photos.push(String(summary.defaultPhotoStream));
   const amenities = unique(
-    (detail?.amenities?.length
+    (Array.isArray(detail?.amenities) && detail.amenities.length
       ? detail.amenities.map((amenity) => compactText(amenity.name))
       : compactText(summary.amenities).split(","))
       .map(compactText)
@@ -304,7 +409,8 @@ function findJoin(
 async function identifyBuilding(
   building: MarketplaceBuilding,
   borough: string,
-  joins: HousingConnectBuildingRow[]
+  joins: HousingConnectBuildingRow[],
+  signal?: AbortSignal
 ): Promise<{ building: MarketplaceBuilding; address: Address | null }> {
   const joined = findJoin(building, joins);
   if (joined?.address_bbl) {
@@ -328,9 +434,13 @@ async function identifyBuilding(
     };
   }
   try {
-    const address = await resolveAddress(`${building.address}, ${building.city || borough}, NY ${building.zip}`);
+    const address = await resolveAddress(
+      `${building.address}, ${building.city || borough}, NY ${building.zip}`,
+      signal
+    );
     return { building: { ...building, bbl: address.bbl, bin: address.bin, zip: address.zip || building.zip }, address };
   } catch {
+    throwIfAborted(signal);
     return { building, address: null };
   }
 }
@@ -387,20 +497,32 @@ function explanation(listing: MarketplaceListing) {
   return `Your household and income fit ${offerText}; ${risk}.`;
 }
 
-export async function enrichListing(listing: MarketplaceListing): Promise<MarketplaceListing> {
-  const joins = await fetchHousingConnectBuildings(listing.id);
-  const identities = await Promise.all(
-    listing.buildings.map((building) => identifyBuilding(building, listing.borough, joins))
+export async function enrichListing(
+  listing: MarketplaceListing,
+  signal?: AbortSignal
+): Promise<MarketplaceListing> {
+  throwIfAborted(signal);
+  const joins = await fetchHousingConnectBuildings(listing.id, signal);
+  const identities = await mapWithConcurrency(
+    listing.buildings,
+    2,
+    (building) => identifyBuilding(building, listing.borough, joins, signal),
+    signal
   );
-  const assessments = await Promise.all(
-    identities.map(async ({ address }) => {
+  const assessments = await mapWithConcurrency(
+    identities,
+    2,
+    async ({ address }) => {
+      throwIfAborted(signal);
       if (!address) return unavailableAssessment();
       try {
-        return await assessBuilding(address);
+        return await assessBuilding(address, signal);
       } catch {
+        throwIfAborted(signal);
         return unavailableAssessment();
       }
-    })
+    },
+    signal
   );
   const violations = sortViolations(assessments.flatMap((assessment) => assessment.violations));
   const historical = sortViolations(
@@ -434,27 +556,61 @@ function finalScore(listing: MarketplaceListing, plan: SearchPlan) {
   return score;
 }
 
+function precheckSpotlightScore(listing: MarketplaceListing) {
+  const risk = { High: 4, Moderate: 3, Low: 2, Unavailable: 1 }[listing.risk.level];
+  return risk * 10_000 + (listing.risk.openCount ?? 0) * 10 + listing.precheck.categories.length;
+}
+
+export function selectMarketplaceListings(
+  inspected: MarketplaceListing[],
+  plan: SearchPlan,
+  coreLimit = 6
+) {
+  const ranked = [...inspected].sort((a, b) => finalScore(b, plan) - finalScore(a, plan));
+  const actionable = ranked
+    .filter((listing) => listing.precheck.categories.length > 0 && listing.violations.length > 0)
+    .sort((a, b) => precheckSpotlightScore(b) - precheckSpotlightScore(a));
+  const retained = unique([
+    ...ranked.slice(0, coreLimit).map((listing) => listing.id),
+    ...actionable.map((listing) => listing.id),
+  ])
+    .slice(0, 8)
+    .map((id) => ranked.find((listing) => listing.id === id)!);
+  const spotlightId = actionable[0]?.id;
+  return retained.map((listing) => ({
+    ...listing,
+    spotlight: listing.id === spotlightId ? ("precheck" as const) : undefined,
+  }));
+}
+
 export type MarketplaceEmitter = (event: MarketplaceEvent) => void;
 
-export async function runMarketplaceSearch(input: RenterBrief, emit: MarketplaceEmitter) {
+export async function runMarketplaceSearch(
+  input: RenterBrief,
+  emit: MarketplaceEmitter,
+  options: { signal?: AbortSignal } = {}
+) {
+  const { signal } = options;
+  throwIfAborted(signal);
   emit({ stage: "planning", message: "Turning your brief into a search plan" });
-  const plan = await planRenterSearch(input);
+  const plan = await planRenterSearch(input, signal);
+  throwIfAborted(signal);
   emit({ stage: "plan", plan });
 
-  const inventory = await getHousingInventory();
+  const inventory = await getHousingInventory(signal);
   emit({
     stage: "inventory",
     message: `Found ${inventory.rentals.length} active Housing Connect rental opportunities`,
     count: inventory.rentals.length,
     source: inventory.source,
   });
-  const candidates = [...inventory.rentals]
-    .sort((a, b) => prelimScore(b, input, plan) - prelimScore(a, input, plan))
-    .slice(0, 8);
+  const candidates = chooseMarketplaceCandidates(inventory.rentals, input, plan);
   emit({ stage: "inspecting", message: "Reading exact unit and income bands", completed: 0, total: candidates.length });
-  const bases = await Promise.all(
-    candidates.map(async (summary) => {
-      const detailResult = await getLotteryDetail(summary.lotteryId);
+  const bases = await mapWithConcurrency(
+    candidates,
+    4,
+    async (summary) => {
+      const detailResult = await getLotteryDetail(summary.lotteryId, signal);
       return listingBase(
         summary,
         detailResult?.detail ?? null,
@@ -462,50 +618,64 @@ export async function runMarketplaceSearch(input: RenterBrief, emit: Marketplace
         plan,
         detailResult?.source ?? inventory.source
       );
-    })
+    },
+    signal
   );
-  const selected = bases
-    .sort((a, b) => {
-      const status = { eligible: 3, near: 2, unknown: 1 };
-      return status[b.eligibility.status] - status[a.eligibility.status];
-    })
-    .slice(0, 6);
-
   let completed = 0;
-  const enriched = await Promise.all(
-    selected.map(async (listing) => {
-      const result = await enrichListing(listing);
+  const inspected = await mapWithConcurrency(
+    bases,
+    2,
+    async (listing) => {
+      const result = await enrichListing(listing, signal);
       completed += 1;
       emit({
         stage: "inspecting",
-        message: `Checked ${completed} of ${selected.length} building records`,
+        message: `Checked ${completed} of ${bases.length} building records`,
         completed,
-        total: selected.length,
+        total: bases.length,
       });
       emit({ stage: "listing", listing: result });
       return result;
-    })
+    },
+    signal
   );
+  const selected = selectMarketplaceListings(inspected, plan);
 
-  emit({ stage: "pricing", message: "Pricing one shared set of safe Precheck categories" });
-  const priced = await pricePrecheckKits(enriched);
+  emit({ stage: "pricing", message: "Tailoring and pricing one shared set of safe move-in items" });
+  const recorded = selected.some((listing) => listing.spotlight === "precheck")
+    ? null
+    : recordedPrecheckShowcase();
+  // Keep the search fast. Public building facts and transit tailor the cards;
+  // the bounded image-model pass runs when a renter opens one listing detail.
+  const contextualized = await addContextualPrecheck(
+    recorded ? [...selected, recorded] : selected,
+    null,
+    signal
+  );
+  const pricedAll = await pricePrecheckKits(contextualized, undefined, signal);
+  const showcase = pricedAll.find((listing) => listing.source === "showcase");
+  const priced = pricedAll.filter((listing) => listing.source !== "showcase");
   const sorted = priced.sort((a, b) => finalScore(b, plan) - finalScore(a, plan));
   const exact = sorted.filter((listing) => listing.eligibility.status === "eligible");
   const near = sorted.filter((listing) => listing.eligibility.status !== "eligible");
-  emit({ stage: "results", exact, near });
-  return { plan, exact, near };
+  emit({ stage: "results", exact, near, showcase });
+  return { plan, exact, near, showcase };
 }
 
-export async function getMarketplaceListing(id: string, input?: RenterBrief) {
-  const found = await getLotterySummary(id);
+export async function getMarketplaceListing(id: string, input?: RenterBrief, signal?: AbortSignal) {
+  if (id === PRECHECK_SHOWCASE_ID) {
+    const [contextualized] = await addContextualPrecheck([recordedPrecheckShowcase()], undefined, signal);
+    return (await pricePrecheckKits([contextualized], undefined, signal))[0];
+  }
+  const found = await getLotterySummary(id, signal);
   if (!found) return null;
   const renter = input ?? {
     brief: "",
     householdSize: Math.max(1, Number(found.summary.minHouseholdSize) || 1),
     annualIncome: Math.max(1, Number(found.summary.minIncome) || 1),
   };
-  const plan = await planRenterSearch(renter);
-  const detailResult = await getLotteryDetail(id);
+  const plan = await planRenterSearch(renter, signal);
+  const detailResult = await getLotteryDetail(id, signal);
   const base = listingBase(
     found.summary,
     detailResult?.detail ?? null,
@@ -513,6 +683,7 @@ export async function getMarketplaceListing(id: string, input?: RenterBrief) {
     plan,
     detailResult?.source ?? found.source
   );
-  const enriched = await enrichListing(base);
-  return (await pricePrecheckKits([enriched]))[0];
+  const enriched = await enrichListing(base, signal);
+  const [contextualized] = await addContextualPrecheck([enriched], undefined, signal);
+  return (await pricePrecheckKits([contextualized], undefined, signal))[0];
 }

@@ -315,6 +315,28 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .no-results { padding: 32px; border: 1px solid var(--line); border-radius: 14px; background: var(--wash); }
 .no-results h3 { margin: 0 0 8px; }
 .no-results p { color: var(--muted); font-size: 13px; }
+.precheck-spotlight { margin-bottom: 22px; padding: 14px 14px 1px; border: 1px solid #efccc7; border-radius: 16px; background: #fffaf9; }
+.spotlight-heading { padding: 4px 3px 14px; display: grid; grid-template-columns: minmax(180px, .72fr) minmax(240px, 1.28fr); gap: 24px; align-items: end; }
+.spotlight-heading h3 { margin: 6px 0 0; font-size: 18px; letter-spacing: -.02em; }
+.spotlight-heading > p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.precheck-spotlight .market-card { margin-bottom: 13px; border-color: #dfaaa2; }
+.recorded-showcase-card { margin-bottom: 13px; border: 1px solid #dfaaa2; border-radius: 13px; overflow: hidden; background: var(--paper); }
+.recorded-showcase-card.selected { box-shadow: 0 0 0 2px var(--red); }
+.recorded-showcase-card > button { width: 100%; min-height: 136px; padding: 0; border: 0; background: transparent; display: grid; grid-template-columns: 104px minmax(0, 1fr) 142px; text-align: left; cursor: pointer; }
+.recorded-risk { padding: 18px 14px; background: var(--red); color: #fff; display: flex; flex-direction: column; justify-content: space-between; }
+.recorded-risk span, .recorded-copy > span, .recorded-cost span { font: 8px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.recorded-risk strong { font-size: 22px; }
+.recorded-copy { min-width: 0; padding: 18px; }
+.recorded-copy > span, .recorded-cost span { color: var(--quiet); }
+.recorded-copy h4 { margin: 10px 0 6px; font-size: 17px; }
+.recorded-copy p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.recorded-cost { padding: 18px 14px; border-left: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; text-align: right; }
+.recorded-cost strong { font-size: 12px; }
+.recorded-cost i { color: var(--red); font: 9px var(--mono); font-style: normal; }
+.case-study-banner { min-height: 240px; padding: 46px 34px; background: var(--red); color: #fff; display: flex; flex-direction: column; justify-content: flex-end; }
+.case-study-banner span { font: 9px var(--mono); letter-spacing: .13em; text-transform: uppercase; opacity: .72; }
+.case-study-banner strong { margin-top: 12px; font-size: clamp(30px, 5vw, 54px); line-height: .95; letter-spacing: -.05em; }
+.case-study-banner p { max-width: 570px; margin: 16px 0 0; font-size: 13px; line-height: 1.55; opacity: .82; }
 
 .map-pane { position: sticky; top: 14px; min-width: 0; }
 .citymap { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--paper); }
@@ -407,6 +429,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .kit-item strong { font-size: 10px; }
 .kit-item span, .kit-item em { font-size: 8px; line-height: 1.35; color: var(--quiet); font-style: normal; }
 .kit-item em { color: var(--amber); font-family: var(--mono); text-transform: uppercase; }
+.kit-item .kit-basis { width: fit-content; margin-top: 3px; padding: 3px 5px; border-radius: 999px; background: var(--wash); color: var(--muted); letter-spacing: .03em; }
+.kit-item .basis-violation { background: var(--red-wash); color: var(--red); }
+.kit-item .basis-location, .kit-item .basis-photo { background: #edf3ff; color: #315d9b; }
+.kit-item .basis-building { background: var(--green-wash); color: var(--green); }
 .kit-price { font-family: var(--mono); font-size: 10px; }
 .fine-print { padding-top: 10px; border-top: 1px solid var(--line); color: var(--quiet) !important; font-size: 8px !important; }
 .redflag { padding: 11px 0; border-top: 1px solid #f1c8c2; display: flex; flex-direction: column; gap: 3px; }
@@ -487,6 +513,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
   .citymap-canvas { height: 460px; min-height: 0; }
   .results-pane { grid-row: 2; }
   .market-intro { min-height: 0; }
+  .spotlight-heading { grid-template-columns: 1fr; gap: 8px; }
   .listing-detail-page .detail-hero, .listing-detail-page .detail-map-section { grid-template-columns: 1fr; }
   .listing-detail-page .detail-gallery, .listing-detail-page .gallery-stage { min-height: 320px; }
 }
@@ -516,6 +543,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
   .results-heading { align-items: start; }
   .results-heading > span { max-width: 120px; }
   .market-footer { align-items: flex-start; flex-direction: column; }
+  .recorded-showcase-card > button { grid-template-columns: 82px 1fr; }
+  .recorded-cost { grid-column: 1 / -1; min-height: 70px; border-top: 1px solid var(--line); border-left: 0; flex-direction: row; align-items: center; text-align: left; }
   .detail-panel { width: 100vw; }
   .detail-gallery { height: 300px; }
   .detail-content { padding: 24px 18px 48px; }

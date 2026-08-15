@@ -23,6 +23,7 @@ export type Listing = {
   maxIncome?: number;
   incomeBands?: { extremelyLow: number; veryLow: number; low: number; moderate: number };
   started?: string;
+  listedDate?: string;
   url?: string;
   imageUrl?: string;
   imageUrls?: string[];
@@ -34,6 +35,9 @@ export type Listing = {
 export type Query = {
   borough?: string;
   boroughs?: string[];
+  annualIncome?: number;
+  sortBy?: string;
+  actionableOnly?: boolean;
   maxRent?: number;
   minBeds?: number;
   minUnits?: number;
@@ -87,7 +91,13 @@ export function allListings(): Listing[] {
         url: listing.applicationUrl,
       } as Listing;
     });
-    cache = [...provider, ...hdc, ...legacy];
+    const publicationDate = (listing: Listing) => {
+      const source = `${listing.applicationUrl ?? ""} ${listing.imageUrl ?? ""} ${listing.url ?? ""}`;
+      const match = source.match(/\/(20\d{2})[-/](0?[1-9]|1[0-2])(?:[-/](0?[1-9]|[12]\d|3[01]))?/);
+      if (match) return `${match[1]}-${match[2].padStart(2, "0")}-${(match[3] ?? "01").padStart(2, "0")}`;
+      return listing.started?.slice(0, 10);
+    };
+    cache = [...provider, ...hdc, ...legacy].map((listing) => ({ ...listing, listedDate: listing.listedDate ?? publicationDate(listing) }));
   } catch {
     cache = [];
   }
@@ -101,8 +111,10 @@ export function getListing(id: string): Listing | null {
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
 
 export function searchListings(q: Query): Listing[] {
-  const limit = Math.min(q.limit ?? 12, 40);
+  const limit = Math.min(q.limit ?? 12, 5000);
   let out = allListings();
+
+  if (q.actionableOnly) out = out.filter((listing) => listing.source !== "hpd" || Boolean(listing.rent || listing.applicationUrl || listing.url));
 
   const wantedBoroughs = q.boroughs?.length ? q.boroughs : q.borough ? [q.borough] : [];
   if (wantedBoroughs.length) {
@@ -119,9 +131,27 @@ export function searchListings(q: Query): Listing[] {
 
   // Listings with a real rent first — they are the ones a renter can act on.
   out = [...out].sort((a, b) => {
+    if ((q.sortBy ?? "newest listed").includes("newest")) {
+      const dateDifference = Date.parse(b.listedDate ?? "1970-01-01") - Date.parse(a.listedDate ?? "1970-01-01");
+      if (dateDifference) return dateDifference;
+    }
+    if (q.annualIncome) {
+      const incomeScore = (listing: Listing) => {
+        if (listing.minIncome || listing.maxIncome) {
+          if (q.annualIncome! < (listing.minIncome ?? 0)) return (listing.minIncome! - q.annualIncome!) / q.annualIncome!;
+          if (q.annualIncome! > (listing.maxIncome ?? Infinity)) return (q.annualIncome! - listing.maxIncome!) / q.annualIncome!;
+          return 0;
+        }
+        if (listing.rent) return Math.abs(Math.log(q.annualIncome! / (listing.rent * 40)));
+        return 2;
+      };
+      const incomeDifference = incomeScore(a) - incomeScore(b);
+      if (incomeDifference) return incomeDifference;
+    }
     const ar = a.rent ? 0 : 1;
     const br = b.rent ? 0 : 1;
     if (ar !== br) return ar - br;
+    if (q.sortBy?.includes("cheapest")) return (a.rent ?? Infinity) - (b.rent ?? Infinity);
     const ag = (a.imageUrls?.length ?? 0) > 1 ? 0 : 1;
     const bg = (b.imageUrls?.length ?? 0) > 1 ? 0 : 1;
     if (ag !== bg) return ag - bg;

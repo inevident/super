@@ -122,6 +122,9 @@ export function searchListings(q: Query): Listing[] {
     const ar = a.rent ? 0 : 1;
     const br = b.rent ? 0 : 1;
     if (ar !== br) return ar - br;
+    const ag = (a.imageUrls?.length ?? 0) > 1 ? 0 : 1;
+    const bg = (b.imageUrls?.length ?? 0) > 1 ? 0 : 1;
+    if (ag !== bg) return ag - bg;
     return (b.units ?? 0) - (a.units ?? 0);
   });
 
